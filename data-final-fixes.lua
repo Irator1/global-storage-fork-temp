@@ -31,3 +31,11 @@ local function add_global_chest_as_pastable_target()
 end
 
 add_global_chest_as_pastable_target()
+
+-- Add global provider chest unlock to construction-robotics technology
+if data.raw["technology"]["construction-robotics"] then
+    table.insert(data.raw["technology"]["construction-robotics"].effects, {
+        type = "unlock-recipe",
+        recipe = constants.GLOBAL_PROVIDER_CHEST_ENTITY_NAME
+    })
+end
