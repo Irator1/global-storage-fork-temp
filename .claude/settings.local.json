@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "WebFetch(domain:lua-api.factorio.com)",
+      "WebFetch(domain:forums.factorio.com)",
+      "WebFetch(domain:mods.factorio.com)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:wiki.factorio.com)",
+      "WebFetch(domain:drive.usercontent.google.com)"
+    ]
+  }
+}

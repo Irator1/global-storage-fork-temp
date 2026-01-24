@@ -1,0 +1,11 @@
+{
+  "name": "global-storage",
+  "version": "0.1.0",
+  "title": "Global Network",
+  "author": "charlesbl",
+  "factorio_version": "2.0",
+  "dependencies": [
+    "base >= 2.0"
+  ],
+  "description": "Adds a global storage network using linked chests. Set network IDs to share inventory between chests. Copy-paste from assemblers to auto-configure."
+}
