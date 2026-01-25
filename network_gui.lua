@@ -161,7 +161,7 @@ function M.build_networks_tab(parent, player)
     networks_table.add({ type = "label", caption = { "gui.network-name" }, style = "bold_label" })
     networks_table.add({ type = "label", caption = { "gui.requests-count" }, style = "bold_label" })
     networks_table.add({ type = "label", caption = { "gui.chests-count" }, style = "bold_label" })
-    networks_table.add({ type = "label", caption = { "gui.status" }, style = "bold_label" })
+    networks_table.add({ type = "label", caption = { "gui.gn-status" }, style = "bold_label" })
     networks_table.add({ type = "label", caption = "", style = "bold_label" })
 
     -- Initialize element cache for this player
@@ -203,7 +203,7 @@ function M.build_networks_tab(parent, player)
         local status_label = networks_table.add({
             type = "label",
             name = GUI.NETWORK_STATUS_LABEL .. network_name,
-            caption = is_ghost and { "gui.status-ghost" } or { "gui.status-active" }
+            caption = is_ghost and { "gui.gn-status-ghost" } or { "gui.gn-status-active" }
         })
         status_label.style.font_color = is_ghost and { r = 1, g = 0.5, b = 0 } or { r = 0, g = 1, b = 0 }
 
@@ -536,7 +536,7 @@ function M.open_inventory_edit_popup(player, item_name)
     -- Limit section
     local limit_flow = content.add({ type = "flow", direction = "horizontal" })
     limit_flow.style.vertical_align = "center"
-    limit_flow.add({ type = "label", caption = { "gui.limit" } })
+    limit_flow.add({ type = "label", caption = { "gui.gn-limit" } })
     local limit_field = limit_flow.add({
         type = "textfield",
         name = GUI.INVENTORY_EDIT_LIMIT_FIELD,
@@ -555,7 +555,7 @@ function M.open_inventory_edit_popup(player, item_name)
     unlimited_flow.add({
         type = "checkbox",
         name = GUI.INVENTORY_EDIT_UNLIMITED_CB,
-        caption = { "gui.unlimited" },
+        caption = { "gui.gn-unlimited" },
         state = is_unlimited,
         tooltip = { "gui.unlimited-tooltip" },
         tags = { item_name = item_name }
@@ -584,7 +584,7 @@ function M.open_inventory_edit_popup(player, item_name)
     button_flow.add({
         type = "button",
         name = GUI.INVENTORY_EDIT_CONFIRM,
-        caption = { "gui.ok" },
+        caption = { "gui.gn-ok" },
         style = "confirm_button",
         tags = { item_name = item_name }
     })
@@ -1096,14 +1096,14 @@ function M.create_delete_confirm_popup(player, network_name, chest_count)
     button_flow.add({
         type = "button",
         name = GUI.NETWORK_DELETE_CONFIRM_YES,
-        caption = { "gui.confirm" },
+        caption = { "gui.gn-delete-confirm" },
         style = "red_button",
         tags = { network_name = network_name }
     })
     button_flow.add({
         type = "button",
         name = GUI.NETWORK_DELETE_CONFIRM_NO,
-        caption = { "gui.cancel" }
+        caption = { "gui.gn-cancel" }
     })
 
     -- Set flag to prevent network GUI from being destroyed
@@ -1580,7 +1580,7 @@ function M.update_live(player)
                     -- Update status
                     local is_ghost = (network.chest_count or 0) == 0
                     if cached.status_label and cached.status_label.valid then
-                        cached.status_label.caption = is_ghost and { "gui.status-ghost" } or { "gui.status-active" }
+                        cached.status_label.caption = is_ghost and { "gui.gn-status-ghost" } or { "gui.gn-status-active" }
                         cached.status_label.style.font_color = is_ghost and { r = 1, g = 0.5, b = 0 } or { r = 0, g = 1, b = 0 }
                     end
                 end

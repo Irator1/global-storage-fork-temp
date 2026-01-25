@@ -302,14 +302,14 @@ function M.open_request_popup(player, slot_index, item_name, current_quantity)
     button_flow.add({
         type = "button",
         name = GUI.PROVIDER_REQUEST_CONFIRM,
-        caption = {"gui.ok"},
+        caption = {"gui.gn-ok"},
         style = "confirm_button"
     })
 
     button_flow.add({
         type = "button",
         name = GUI.PROVIDER_REQUEST_CANCEL,
-        caption = {"gui.cancel"}
+        caption = {"gui.gn-cancel"}
     })
 
     -- Focus the quantity field
