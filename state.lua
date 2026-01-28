@@ -26,6 +26,7 @@ function M.init()
     storage.link_id_to_network = storage.link_id_to_network or {}
     storage.player_data = storage.player_data or {}
     storage.provider_chests = storage.provider_chests or {}  -- Provider chests with per-chest requests
+    storage.chest_networks = storage.chest_networks or {}  -- unit_number → network_name (for reliable tracking)
 
     -- Migration: add cached link_id to existing networks and rebuild reverse mapping
     for name, network in pairs(storage.networks) do
@@ -43,12 +44,16 @@ function M.init()
 end
 
 --- Recalculate chest_count for all networks by scanning all surfaces
+--- Also rebuilds chest_networks tracking table
 --- Called on configuration changed to fix any desync
 function M.recalculate_chest_counts()
     -- Reset all counts to 0
     for _, network in pairs(storage.networks) do
         network.chest_count = 0
     end
+
+    -- Reset chest tracking
+    storage.chest_networks = {}
 
     -- Scan all surfaces for chests
     for _, surface in pairs(game.surfaces) do
@@ -64,6 +69,8 @@ function M.recalculate_chest_counts()
                     if network_name and storage.networks[network_name] then
                         storage.networks[network_name].chest_count =
                             (storage.networks[network_name].chest_count or 0) + 1
+                        -- Also rebuild chest tracking
+                        storage.chest_networks[chest.unit_number] = network_name
                     end
                 end
             end
@@ -105,6 +112,29 @@ end
 ---@return string|nil network_name
 function M.get_network_name(link_id)
     return storage.link_id_to_network[link_id]
+end
+
+--- Set tracked network for a chest (by unit_number)
+---@param unit_number number
+---@param network_name string
+function M.set_chest_tracked_network(unit_number, network_name)
+    storage.chest_networks = storage.chest_networks or {}
+    storage.chest_networks[unit_number] = network_name
+end
+
+--- Get tracked network for a chest (by unit_number)
+---@param unit_number number
+---@return string|nil network_name
+function M.get_chest_tracked_network(unit_number)
+    if not storage.chest_networks then return nil end
+    return storage.chest_networks[unit_number]
+end
+
+--- Remove tracking for a chest (by unit_number)
+---@param unit_number number
+function M.remove_chest_tracking(unit_number)
+    if not storage.chest_networks then return end
+    storage.chest_networks[unit_number] = nil
 end
 
 --- Delete a network and transfer its items to global pool
@@ -202,6 +232,7 @@ function M.reassign_network_chests(old_network_name, new_network_name)
         for _, chest in pairs(chests) do
             if chest.valid and chest.link_id == old_link_id then
                 chest.link_id = new_link_id
+                M.set_chest_tracked_network(chest.unit_number, target_network)
                 count = count + 1
             end
         end

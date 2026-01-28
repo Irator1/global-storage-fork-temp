@@ -29,7 +29,7 @@ local function on_any_chest_built(event)
             -- Assign default network to new chests without explicit network ID
             network_module.set_chest_network(entity, constants.DEFAULT_NETWORK_NAME)
         else
-            network_module.on_chest_built(link_id)
+            network_module.on_chest_built(link_id, entity.unit_number)
         end
         return
     end
@@ -53,6 +53,7 @@ local function on_any_chest_destroyed(event)
         if link_id and link_id ~= 0 then
             network_module.on_chest_destroyed(link_id)
         end
+        state.remove_chest_tracking(entity.unit_number)
         return
     end
 

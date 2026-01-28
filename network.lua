@@ -51,9 +51,8 @@ end
 function M.set_chest_network(chest, new_network_name, manual)
     if not chest or not chest.valid then return end
 
-    -- Get old network name
-    local old_link_id = chest.link_id
-    local old_network_name = state.get_network_name(old_link_id)
+    -- Get old network from our tracking (not from link_id which may be stale after copy-paste)
+    local old_network_name = state.get_chest_tracked_network(chest.unit_number)
 
     -- Decrement old network chest count
     if old_network_name and storage.networks[old_network_name] then
@@ -61,10 +60,11 @@ function M.set_chest_network(chest, new_network_name, manual)
             math.max(0, (storage.networks[old_network_name].chest_count or 0) - 1)
     end
 
-    -- Set new link_id
+    -- Set new link_id and update tracking
     if new_network_name and new_network_name ~= "" then
         local new_link_id = state.get_link_id(new_network_name)
         chest.link_id = new_link_id
+        state.set_chest_tracked_network(chest.unit_number, new_network_name)
 
         -- Create network if needed and increment chest count
         local network = state.get_or_create_network(new_network_name, manual)
@@ -73,6 +73,7 @@ function M.set_chest_network(chest, new_network_name, manual)
         end
     else
         chest.link_id = 0
+        state.remove_chest_tracking(chest.unit_number)
     end
 end
 
@@ -86,13 +87,15 @@ function M.get_chest_network_name(chest)
     return state.get_network_name(link_id)
 end
 
---- Increment chest count for a network (called when chest built)
+--- Increment chest count for a network (called when chest built with existing link_id)
 ---@param link_id number
-function M.on_chest_built(link_id)
+---@param unit_number number
+function M.on_chest_built(link_id, unit_number)
     local network_name = state.get_network_name(link_id)
     if network_name and storage.networks[network_name] then
         storage.networks[network_name].chest_count =
             (storage.networks[network_name].chest_count or 0) + 1
+        state.set_chest_tracked_network(unit_number, network_name)
     end
 end
 
