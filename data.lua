@@ -13,6 +13,7 @@ local global_chest_entity = table.deepcopy(data.raw["linked-container"]["linked-
 global_chest_entity.name = constants.GLOBAL_CHEST_ENTITY_NAME
 global_chest_entity.inventory_type = "with_filters_and_bar"
 global_chest_entity.minable.result = global_chest_entity.name
+global_chest_entity.inventory_size = settings.startup["global-storage-chest-slots"].value
 
 -- Item
 local global_chest_item = table.deepcopy(data.raw["item"]["linked-chest"])

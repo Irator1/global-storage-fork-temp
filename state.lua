@@ -2,19 +2,14 @@ local constants = require("constants")
 
 local M = {}
 
---- Hash function to convert network name to link_id
---- Same algorithm as original chest_ids.lua
----@param name string Network name
+--- Allocate the next unique link_id for a new network
+--- Uses a sequential counter stored in storage.next_link_id
+--- Link_id 0 means "no network" in linked containers, so we start at 1
 ---@return number link_id
-function M.get_link_id(name)
-    if not name or name == "" then
-        return 0
-    end
-    local hash = 0
-    for i = 1, #name do
-        hash = (hash * i + string.byte(name, i) * i) % (2 ^ 32)
-    end
-    return hash
+function M.allocate_link_id()
+    local id = storage.next_link_id or 1
+    storage.next_link_id = id + 1
+    return id
 end
 
 --- Initialize storage structure for new game
@@ -22,20 +17,27 @@ function M.init()
     storage.networks = storage.networks or {}
     storage.inventory = storage.inventory or {}
     storage.limits = storage.limits or {}
-    storage.previous_limits = storage.previous_limits or {}  -- Remembers last numeric limit when switching to unlimited
+    storage.previous_limits = storage.previous_limits or {}
     storage.link_id_to_network = storage.link_id_to_network or {}
     storage.player_data = storage.player_data or {}
-    storage.provider_chests = storage.provider_chests or {}  -- Provider chests with per-chest requests
-    storage.chest_networks = storage.chest_networks or {}  -- unit_number → network_name (for reliable tracking)
+    storage.provider_chests = storage.provider_chests or {}
+    storage.chest_networks = storage.chest_networks or {}
 
-    -- Migration: add cached link_id to existing networks and rebuild reverse mapping
+    -- Sequential link_id counter (starts at 1, 0 = no network)
+    storage.next_link_id = storage.next_link_id or 1
+
+    -- Rebuild reverse mapping from existing networks
     for name, network in pairs(storage.networks) do
-        local link_id = M.get_link_id(name)
-        if not network.link_id then
-            network.link_id = link_id
+        -- Register all link_ids in reverse mapping
+        for _, lid in ipairs(network.link_ids) do
+            if lid then
+                storage.link_id_to_network[lid] = name
+                -- Ensure counter stays ahead of all existing IDs
+                if lid >= storage.next_link_id then
+                    storage.next_link_id = lid + 1
+                end
+            end
         end
-        -- Ensure reverse mapping exists
-        storage.link_id_to_network[link_id] = name
     end
 
     -- Reset round-robin state for rebuild
@@ -88,12 +90,16 @@ function M.get_or_create_network(name, manual)
     end
 
     if not storage.networks[name] then
-        local link_id = M.get_link_id(name)
+        local link_id = M.allocate_link_id()
+
         storage.networks[name] = {
             chest_count = 0,
             requests = {},
             manual = manual or false,
-            link_id = link_id  -- Cache hash for processor performance
+            link_id = link_id,
+            link_ids = {link_id},
+            buffer_count = 1,
+            next_buffer_assign = 1,
         }
         -- Store reverse mapping
         storage.link_id_to_network[link_id] = name
@@ -144,29 +150,140 @@ function M.delete_network(name, force)
     local network = storage.networks[name]
     if not network then return end
 
-    -- Transfer items from linked inventory to global pool
-    local link_id = M.get_link_id(name)
-    local linked_inv = force.get_linked_inventory(constants.GLOBAL_CHEST_ENTITY_NAME, link_id)
-
-    if linked_inv then
-        local contents = linked_inv.get_contents()
-        for _, item in pairs(contents) do
-            local item_name = item.name
-            local count = item.count
-            local current = storage.inventory[item_name] or 0
-
-            -- Bypass limits on deletion: priority = never lose items
-            storage.inventory[item_name] = current + count
-            linked_inv.remove({ name = item_name, count = count })
+    -- Transfer items from ALL linked inventories to global pool
+    local link_ids = network.link_ids
+    for _, lid in ipairs(link_ids) do
+        if lid and lid ~= 0 then
+            local linked_inv = force.get_linked_inventory(constants.GLOBAL_CHEST_ENTITY_NAME, lid)
+            if linked_inv then
+                local contents = linked_inv.get_contents()
+                for _, item in pairs(contents) do
+                    local item_name = item.name
+                    local count = item.count
+                    local current = storage.inventory[item_name] or 0
+                    -- Bypass limits on deletion: never lose items
+                    storage.inventory[item_name] = current + count
+                    linked_inv.remove({ name = item_name, count = count })
+                end
+            end
+            -- Remove reverse mapping for this link_id
+            storage.link_id_to_network[lid] = nil
         end
     end
 
     -- Remove network
     storage.networks[name] = nil
-    storage.link_id_to_network[link_id] = nil
     -- Invalidate network list for round-robin rebuild
     storage.network_list = nil
 end
+
+--- Remove the last buffer from a network
+--- Drains items from the removed buffer to global pool, reassigns chests to remaining buffers
+---@param name string Network name
+---@return boolean success
+function M.remove_network_buffer(name)
+    local network = storage.networks[name]
+    if not network then return false end
+
+    local link_ids = network.link_ids
+    if not link_ids or #link_ids <= 1 then return false end -- Can't remove last buffer
+
+    -- Remove the last link_id
+    local removed_lid = link_ids[#link_ids]
+    link_ids[#link_ids] = nil
+    network.buffer_count = #link_ids
+
+    -- Fix next_buffer_assign if it's now out of range
+    if network.next_buffer_assign and network.next_buffer_assign > #link_ids then
+        network.next_buffer_assign = 1
+    end
+
+    -- Drain items from the removed buffer's linked inventory to global pool
+    -- Get force (first force with players)
+    local force = nil
+    for _, f in pairs(game.forces) do
+        if #f.players > 0 then
+            force = f
+            break
+        end
+    end
+
+    if force and removed_lid and removed_lid ~= 0 then
+        local linked_inv = force.get_linked_inventory(constants.GLOBAL_CHEST_ENTITY_NAME, removed_lid)
+        if linked_inv then
+            local contents = linked_inv.get_contents()
+            for _, item in pairs(contents) do
+                -- Bypass limits: never lose items during buffer removal
+                storage.inventory[item.name] = (storage.inventory[item.name] or 0) + item.count
+                linked_inv.remove({ name = item.name, count = item.count })
+            end
+        end
+    end
+
+    -- Reassign any chests using the removed link_id to the first buffer
+    local target_lid = link_ids[1]
+    if removed_lid and removed_lid ~= 0 and target_lid then
+        for _, surface in pairs(game.surfaces) do
+            local chests = surface.find_entities_filtered({
+                name = constants.GLOBAL_CHEST_ENTITY_NAME
+            })
+            for _, chest in pairs(chests) do
+                if chest.valid and chest.link_id == removed_lid then
+                    chest.link_id = target_lid
+                end
+            end
+        end
+    end
+
+    -- Remove reverse mapping
+    if removed_lid then
+        storage.link_id_to_network[removed_lid] = nil
+    end
+
+    return true
+end
+
+--- Add buffers to a network (increase buffer_count)
+--- Allocates new link_ids and registers them
+---@param name string Network name
+---@param new_count number Target buffer count (must be > current)
+---@return boolean success
+function M.set_network_buffer_count(name, new_count)
+    local network = storage.networks[name]
+    if not network then return false end
+
+    new_count = math.max(1, math.min(new_count, constants.MAX_BUFFER_COUNT))
+
+    local current = #network.link_ids
+    if new_count <= current then return false end -- Only allow increasing
+
+    -- Allocate additional link_ids
+    for _ = current + 1, new_count do
+        local new_lid = M.allocate_link_id()
+        network.link_ids[#network.link_ids + 1] = new_lid
+        storage.link_id_to_network[new_lid] = name
+    end
+
+    network.buffer_count = new_count
+    return true
+end
+
+--- Get the next link_id to assign a chest to (round-robin across buffers)
+---@param network table Network data
+---@return number link_id
+function M.get_next_buffer_link_id(network)
+    local link_ids = network.link_ids
+    if #link_ids == 1 then
+        return link_ids[1]
+    end
+
+    local idx = network.next_buffer_assign or 1
+    if idx > #link_ids then idx = 1 end
+    local lid = link_ids[idx]
+    network.next_buffer_assign = (idx % #link_ids) + 1
+    return lid
+end
+
 
 --- Get player data (create if needed)
 ---@param player_index number
@@ -185,12 +302,11 @@ function M.get_player_data(player_index)
             auto_pin_hud_elements = {}  -- cache auto-pin HUD element references
         }
     end
-    -- Migration: ensure new fields exist for existing player data
+    -- Ensure all fields exist (defensive, in case structure was extended)
     local pdata = storage.player_data[player_index]
     if not pdata.pinned_items then pdata.pinned_items = {} end
     if not pdata.pin_hud_elements then pdata.pin_hud_elements = {} end
     if not pdata.inventory_grid_cache then pdata.inventory_grid_cache = {} end
-    if pdata.opened_provider_chest == nil then pdata.opened_provider_chest = nil end
     if pdata.auto_pin_low_stock_enabled == nil then pdata.auto_pin_low_stock_enabled = false end
     if not pdata.auto_pinned_items then pdata.auto_pinned_items = {} end
     if not pdata.auto_pin_hud_elements then pdata.auto_pin_hud_elements = {} end
@@ -199,39 +315,43 @@ function M.get_player_data(player_index)
     return pdata
 end
 
---- Clean up zero quantities in global inventory
-function M.cleanup_inventory()
-    for item_name, count in pairs(storage.inventory) do
-        if count <= 0 then
-            storage.inventory[item_name] = nil
-        end
-    end
-end
-
 --- Reassign all chests from one network to another (or default)
 --- Used when deleting a network that still has chests
 ---@param old_network_name string Network being deleted
 ---@param new_network_name string|nil Target network (nil = default)
 ---@return number count Number of chests reassigned
 function M.reassign_network_chests(old_network_name, new_network_name)
-    local old_link_id = M.get_link_id(old_network_name)
+    local old_network = storage.networks[old_network_name]
+    if not old_network then return 0 end
+
+    -- Collect all link_ids from old network
+    local old_link_ids = old_network.link_ids
+    local old_lid_set = {}
+    for _, lid in ipairs(old_link_ids) do
+        if lid and lid ~= 0 then
+            old_lid_set[lid] = true
+        end
+    end
+    if not next(old_lid_set) then return 0 end
+
     local target_network = new_network_name or constants.DEFAULT_NETWORK_NAME
-    local new_link_id = M.get_link_id(target_network)
 
-    -- Ensure target network exists
-    M.get_or_create_network(target_network)
-
+    -- Ensure target network exists (allocates link_id if new)
+    local target_net = M.get_or_create_network(target_network)
+    if not target_net then return 0 end
+    -- Assign chests to a buffer in the target network
     local count = 0
 
-    -- Scan all surfaces for chests with the old link_id
+    -- Scan all surfaces for chests with any of the old link_ids
     for _, surface in pairs(game.surfaces) do
         local chests = surface.find_entities_filtered({
             name = constants.GLOBAL_CHEST_ENTITY_NAME
         })
 
         for _, chest in pairs(chests) do
-            if chest.valid and chest.link_id == old_link_id then
-                chest.link_id = new_link_id
+            if chest.valid and old_lid_set[chest.link_id] then
+                local new_lid = M.get_next_buffer_link_id(target_net)
+                chest.link_id = new_lid
                 M.set_chest_tracked_network(chest.unit_number, target_network)
                 count = count + 1
             end
@@ -239,10 +359,7 @@ function M.reassign_network_chests(old_network_name, new_network_name)
     end
 
     -- Update target network chest count
-    if storage.networks[target_network] then
-        storage.networks[target_network].chest_count =
-            (storage.networks[target_network].chest_count or 0) + count
-    end
+    target_net.chest_count = (target_net.chest_count or 0) + count
 
     return count
 end

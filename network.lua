@@ -44,12 +44,14 @@ function M.get_requests(network_name)
 end
 
 --- Change a chest's network (update link_id)
+--- For multi-buffer networks, assigns the chest to the next buffer in round-robin
 --- Note: items stay in old network (linked container behavior)
 ---@param chest LuaEntity
 ---@param new_network_name string
 ---@param manual boolean|nil If true, marks network as manually created (shown in list)
+---@return boolean success Always true (sequential IDs never collide)
 function M.set_chest_network(chest, new_network_name, manual)
-    if not chest or not chest.valid then return end
+    if not chest or not chest.valid then return false end
 
     -- Get old network from our tracking (not from link_id which may be stale after copy-paste)
     local old_network_name = state.get_chest_tracked_network(chest.unit_number)
@@ -62,19 +64,21 @@ function M.set_chest_network(chest, new_network_name, manual)
 
     -- Set new link_id and update tracking
     if new_network_name and new_network_name ~= "" then
-        local new_link_id = state.get_link_id(new_network_name)
-        chest.link_id = new_link_id
-        state.set_chest_tracked_network(chest.unit_number, new_network_name)
-
-        -- Create network if needed and increment chest count
+        -- Create network if needed (allocates sequential link_id)
         local network = state.get_or_create_network(new_network_name, manual)
         if network then
+            -- Use round-robin buffer assignment for multi-buffer networks
+            local lid = state.get_next_buffer_link_id(network)
+            chest.link_id = lid
+            state.set_chest_tracked_network(chest.unit_number, new_network_name)
             network.chest_count = (network.chest_count or 0) + 1
         end
     else
         chest.link_id = 0
         state.remove_chest_tracking(chest.unit_number)
     end
+
+    return true
 end
 
 --- Get the network name for a chest

@@ -1,21 +1,18 @@
 local constants = require("constants")
-local state = require("state")
-local network_module = require("network")
 local player_logistics = require("player_logistics")
 
 local M = {}
 
---- Process a single network: collect surplus and distribute to meet requests
----@param network_name string
----@param network table Network data
----@param force LuaForce
-local function process_network(network_name, network, force)
-    -- Use cached link_id (falls back to calculation if missing)
-    local link_id = network.link_id or state.get_link_id(network_name)
-    local linked_inv = force.get_linked_inventory(constants.GLOBAL_CHEST_ENTITY_NAME, link_id)
+-- Localize frequently used globals for minor Lua performance gain
+local UNLIMITED = constants.UNLIMITED
+local ENTITY_NAME = constants.GLOBAL_CHEST_ENTITY_NAME
 
-    if not linked_inv then return end
-
+--- Process a single linked inventory: collect surplus and distribute to meet requests
+---@param linked_inv LuaInventory
+---@param requests table Network requests {item_name = {min, max}}
+---@param inv table Reference to storage.inventory
+---@param limits table Reference to storage.limits
+local function process_single_buffer(linked_inv, requests, inv, limits)
     local contents = linked_inv.get_contents()
 
     -- Build a lookup table for faster access
@@ -26,22 +23,22 @@ local function process_network(network_name, network, force)
 
     -- 1. Collect surplus (items above max or not in requests)
     for item_name, count in pairs(content_counts) do
-        local request = network.requests[item_name]
+        local request = requests[item_name]
         local max_wanted = request and request.max or 0
 
         if count > max_wanted then
             local surplus = count - max_wanted
 
             -- Check global limit (nil = blocked, -1 = unlimited, >0 = numeric limit)
-            local limit = storage.limits[item_name]
-            local current_global = storage.inventory[item_name] or 0
+            local limit = limits[item_name]
+            local current_global = inv[item_name] or 0
 
             local can_accept = 0
             if limit == nil then
                 -- New item: create limit at 0 so it appears in GUI
-                storage.limits[item_name] = 0
+                limits[item_name] = 0
                 can_accept = 0  -- Blocked until player sets a limit
-            elseif limit == constants.UNLIMITED then
+            elseif limit == UNLIMITED then
                 can_accept = surplus  -- Unlimited
             elseif limit > 0 then
                 can_accept = math.min(surplus, math.max(0, limit - current_global))
@@ -50,29 +47,51 @@ local function process_network(network_name, network, force)
             if can_accept > 0 then
                 local removed = linked_inv.remove({ name = item_name, count = can_accept })
                 if removed > 0 then
-                    storage.inventory[item_name] = (storage.inventory[item_name] or 0) + removed
+                    inv[item_name] = (inv[item_name] or 0) + removed
                 end
             end
         end
     end
 
     -- 2. Distribute to meet minimum requests
-    for item_name, request in pairs(network.requests) do
+    for item_name, request in pairs(requests) do
         local current = content_counts[item_name] or 0
 
         if current < request.min then
             local needed = request.min - current
-            local available = storage.inventory[item_name] or 0
+            local available = inv[item_name] or 0
             local to_insert = math.min(needed, available)
 
             if to_insert > 0 then
                 local inserted = linked_inv.insert({ name = item_name, count = to_insert })
                 if inserted > 0 then
-                    storage.inventory[item_name] = (storage.inventory[item_name] or 0) - inserted
-                    if storage.inventory[item_name] <= 0 then
-                        storage.inventory[item_name] = nil
+                    inv[item_name] = (inv[item_name] or 0) - inserted
+                    if inv[item_name] <= 0 then
+                        inv[item_name] = nil
                     end
                 end
+            end
+        end
+    end
+end
+
+--- Process a single network: collect surplus and distribute to meet requests
+--- Multi-buffer aware: processes all link_ids belonging to the network
+---@param network_name string
+---@param network table Network data
+---@param force LuaForce
+---@param inv table Reference to storage.inventory
+---@param limits table Reference to storage.limits
+local function process_network(network_name, network, force, inv, limits)
+    local requests = network.requests
+    local link_ids = network.link_ids
+    if not link_ids then return end
+
+    for _, lid in ipairs(link_ids) do
+        if lid and lid ~= 0 then
+            local linked_inv = force.get_linked_inventory(ENTITY_NAME, lid)
+            if linked_inv then
+                process_single_buffer(linked_inv, requests, inv, limits)
             end
         end
     end
@@ -88,7 +107,8 @@ function M.rebuild_network_list()
 end
 
 --- Process all provider chests: fill them from the global pool according to their requests
-local function process_provider_chests()
+---@param inv table Reference to storage.inventory
+local function process_provider_chests(inv)
     if not storage.provider_chests then return end
 
     for unit_number, data in pairs(storage.provider_chests) do
@@ -96,21 +116,21 @@ local function process_provider_chests()
             -- Clean up invalid entries
             storage.provider_chests[unit_number] = nil
         else
-            local inv = data.entity.get_inventory(defines.inventory.chest)
-            if inv then
+            local chest_inv = data.entity.get_inventory(defines.inventory.chest)
+            if chest_inv then
                 -- Fill according to requests
                 for item_name, target in pairs(data.requests) do
-                    local current = inv.get_item_count(item_name)
+                    local current = chest_inv.get_item_count(item_name)
                     local needed = target - current
-                    local available = storage.inventory[item_name] or 0
+                    local available = inv[item_name] or 0
 
                     if needed > 0 and available > 0 then
                         local to_insert = math.min(needed, available)
-                        local inserted = inv.insert({name = item_name, count = to_insert})
+                        local inserted = chest_inv.insert({name = item_name, count = to_insert})
                         if inserted > 0 then
-                            storage.inventory[item_name] = storage.inventory[item_name] - inserted
-                            if storage.inventory[item_name] <= 0 then
-                                storage.inventory[item_name] = nil
+                            inv[item_name] = inv[item_name] - inserted
+                            if inv[item_name] <= 0 then
+                                inv[item_name] = nil
                             end
                         end
                     end
@@ -146,6 +166,10 @@ function M.process()
         return
     end
 
+    -- Cache storage tables as locals (minor Lua perf: local access faster than table field)
+    local inv = storage.inventory
+    local limits = storage.limits
+
     -- Process a batch of networks (round-robin)
     local start_index = storage.network_index or 1
     local count = 0
@@ -156,7 +180,7 @@ function M.process()
         if network_name then
             local network = storage.networks[network_name]
             if network then
-                process_network(network_name, network, active_force)
+                process_network(network_name, network, active_force, inv, limits)
             end
         end
 
@@ -171,7 +195,7 @@ function M.process()
     storage.network_index = start_index
 
     -- Process provider chests (fill from global pool)
-    process_provider_chests()
+    process_provider_chests(inv)
 
     -- Process player logistics (lightweight, runs every tick)
     player_logistics.process()

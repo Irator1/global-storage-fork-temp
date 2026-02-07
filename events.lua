@@ -64,6 +64,21 @@ local function on_any_chest_destroyed(event)
     end
 end
 
+--- Build a network name from sorted recipe ingredients
+--- e.g. "Req:copper-cable+iron-plate" for electronic circuit
+---@param recipe LuaRecipe
+---@return string network_name
+local function build_ingredient_network_name(recipe)
+    local ingredient_names = {}
+    for _, ingredient in pairs(recipe.ingredients) do
+        if ingredient.type == "item" then
+            ingredient_names[#ingredient_names + 1] = ingredient.name
+        end
+    end
+    table.sort(ingredient_names)
+    return constants.COPY_PASTE_NETWORK_PREFIX .. table.concat(ingredient_names, "+")
+end
+
 --- Handle copy-paste from assembling machine to chest
 ---@param event EventData.on_entity_settings_pasted
 local function on_entity_settings_pasted(event)
@@ -78,13 +93,13 @@ local function on_entity_settings_pasted(event)
         local recipe = source.get_recipe()
         if not recipe then return end
 
-        -- Get network name from recipe name
-        local network_name = recipe.name
+        -- Build network name from sorted ingredients (e.g. "Req:copper-cable+iron-plate")
+        local network_name = build_ingredient_network_name(recipe)
 
         -- Check if network exists BEFORE creating it
         local is_new_network = (storage.networks[network_name] == nil)
 
-        -- Update chest link_id to match recipe (always)
+        -- Update chest link_id to match ingredient network
         network_module.set_chest_network(destination, network_name)
 
         -- Only set requests and block slots for NEW networks
@@ -250,7 +265,6 @@ local function on_gui_closed(event)
 
         -- Re-open the chest if we have a valid reference
         if chest_unit_number then
-            local player_data = state.get_player_data(event.player_index)
             local chest = player_data.opened_chest
             if chest and chest.valid and chest.unit_number == chest_unit_number then
                 player.opened = chest
@@ -266,7 +280,6 @@ local function on_gui_closed(event)
 
         -- Re-open the chest if we have a valid reference
         if chest_unit_number then
-            local player_data = state.get_player_data(event.player_index)
             local chest = player_data.opened_provider_chest
             if chest and chest.valid and chest.unit_number == chest_unit_number then
                 player.opened = chest

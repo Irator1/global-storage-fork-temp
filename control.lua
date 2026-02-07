@@ -30,13 +30,6 @@ script.on_configuration_changed(function(data)
     end
 
     events.init_player_guis()  -- Recreate relative panels for all players
-
-    -- Migration from old version if needed
-    local mod_changes = data.mod_changes["global-storage"]
-    if mod_changes and mod_changes.old_version then
-        -- Migration logic here if needed
-        -- For now, just ensure structures exist
-    end
 end)
 
 -- Register all event handlers

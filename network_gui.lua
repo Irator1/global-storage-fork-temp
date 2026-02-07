@@ -81,7 +81,7 @@ function M.create(player)
         direction = "vertical"
     })
     frame.auto_center = true
-    frame.style.minimal_width = 500
+    frame.style.minimal_width = 550
 
     -- Tabbed pane
     local tabbed_pane = frame.add({
@@ -147,13 +147,13 @@ function M.build_networks_tab(parent, player)
         name = GUI.NETWORKS_SCROLL,
         direction = "vertical"
     })
-    scroll.style.maximal_height = 400
+    scroll.style.maximal_height = 600
 
     -- Networks table
     local networks_table = scroll.add({
         type = "table",
         name = GUI.NETWORKS_TABLE,
-        column_count = 5,
+        column_count = 6,
         draw_horizontal_lines = true
     })
 
@@ -162,6 +162,7 @@ function M.build_networks_tab(parent, player)
     networks_table.add({ type = "label", caption = { "gui.requests-count" }, style = "bold_label" })
     networks_table.add({ type = "label", caption = { "gui.chests-count" }, style = "bold_label" })
     networks_table.add({ type = "label", caption = { "gui.gn-status" }, style = "bold_label" })
+    networks_table.add({ type = "label", caption = { "gui.gn-buffers" }, style = "bold_label" })
     networks_table.add({ type = "label", caption = "", style = "bold_label" })
 
     -- Initialize element cache for this player
@@ -207,11 +208,51 @@ function M.build_networks_tab(parent, player)
         })
         status_label.style.font_color = is_ghost and { r = 1, g = 0.5, b = 0 } or { r = 0, g = 1, b = 0 }
 
+        -- Buffer count with [+] and [-] buttons
+        local buffer_count = network.buffer_count or 1
+        local buf_flow = networks_table.add({
+            type = "flow",
+            direction = "horizontal"
+        })
+        buf_flow.style.vertical_align = "center"
+        if buffer_count > 1 then
+            local rem_btn = buf_flow.add({
+                type = "button",
+                name = GUI.NETWORK_BUFFER_REMOVE_BUTTON .. "_" .. network_name,
+                caption = "-",
+                tooltip = { "gui.gn-buffer-remove-tooltip" },
+                style = "mini_button",
+                tags = { network_name = network_name }
+            })
+            rem_btn.style.width = 24
+            rem_btn.style.height = 24
+            rem_btn.style.padding = 0
+        end
+        local buf_label = buf_flow.add({
+            type = "label",
+            name = GUI.NETWORK_BUFFER_LABEL .. "_" .. network_name,
+            caption = "×" .. buffer_count
+        })
+        if buffer_count < constants.MAX_BUFFER_COUNT then
+            local add_btn = buf_flow.add({
+                type = "button",
+                name = GUI.NETWORK_BUFFER_ADD_BUTTON .. "_" .. network_name,
+                caption = "+",
+                tooltip = { "gui.gn-buffer-add-tooltip" },
+                style = "mini_button",
+                tags = { network_name = network_name }
+            })
+            add_btn.style.width = 24
+            add_btn.style.height = 24
+            add_btn.style.padding = 0
+        end
+
         -- Cache element references for live updates
         pdata.network_element_cache[network_name] = {
             chest_count_label = chests_label,
             request_count_label = reqs_label,
-            status_label = status_label
+            status_label = status_label,
+            buffer_label = buf_label
         }
 
         -- Delete button (not for default network)
@@ -270,8 +311,8 @@ function M.build_inventory_tab(parent, player)
         name = GUI.INVENTORY_SCROLL,
         direction = "vertical"
     })
-    scroll.style.maximal_height = 400
-    scroll.style.minimal_width = 480
+    scroll.style.maximal_height = 600
+    scroll.style.minimal_width = 520
 
     -- Inventory grid (10 columns)
     local grid = scroll.add({
@@ -426,6 +467,34 @@ function M.rebuild_inventory_tab(player)
     M.build_inventory_tab(inventory_content, player)
 end
 
+--- Rebuild the networks tab content (e.g., after buffer count change)
+---@param player LuaPlayer
+function M.rebuild_networks_tab(player)
+    local frame = player.gui.screen[GUI.NETWORK_FRAME]
+    if not frame then return end
+
+    local tabs = frame[GUI.NETWORK_TABS]
+    if not tabs then return end
+
+    -- Find the networks content frame (1st tab content)
+    local networks_content = nil
+    for _, child in pairs(tabs.children) do
+        if child.type == "frame" then
+            local scroll = child[GUI.NETWORKS_SCROLL]
+            if scroll then
+                networks_content = child
+                break
+            end
+        end
+    end
+
+    if not networks_content then return end
+
+    -- Clear and rebuild
+    networks_content.clear()
+    M.build_networks_tab(networks_content, player)
+end
+
 --- Build the player logistics tab content
 ---@param parent LuaGuiElement
 ---@param player LuaPlayer
@@ -575,10 +644,18 @@ function M.open_inventory_edit_popup(player, item_name)
         tags = { item_name = item_name }
     })
 
-    -- Confirm button
+    -- Button row: Remove (left) and OK (right)
     local button_flow = popup.add({ type = "flow", direction = "horizontal" })
     button_flow.style.top_margin = 8
     button_flow.style.horizontal_align = "right"
+    button_flow.add({
+        type = "button",
+        name = GUI.INVENTORY_EDIT_REMOVE,
+        caption = { "gui.gn-remove-item" },
+        style = "red_button",
+        tooltip = { "gui.gn-remove-item-tooltip" },
+        tags = { item_name = item_name }
+    })
     local spacer2 = button_flow.add({ type = "empty-widget" })
     spacer2.style.horizontally_stretchable = true
     button_flow.add({
@@ -1129,28 +1206,14 @@ end
 function M.do_delete_network(player, network_name)
     state.delete_network(network_name, player.force)
 
-    -- Remove row elements from table
-    local frame = player.gui.screen[GUI.NETWORK_FRAME]
-    if frame then
-        local elements_to_destroy = {
-            M.find_element(frame, "gn_net_name_" .. network_name),
-            M.find_element(frame, GUI.NETWORK_REQUEST_COUNT_LABEL .. network_name),
-            M.find_element(frame, GUI.NETWORK_CHEST_COUNT_LABEL .. network_name),
-            M.find_element(frame, GUI.NETWORK_STATUS_LABEL .. network_name),
-            M.find_element(frame, GUI.NETWORK_DELETE_BUTTON .. "_" .. network_name)
-        }
-        for _, elem in pairs(elements_to_destroy) do
-            if elem and elem.valid then
-                elem.destroy()
-            end
-        end
-    end
-
     -- Remove from element cache
     local pdata = state.get_player_data(player.index)
     if pdata.network_element_cache then
         pdata.network_element_cache[network_name] = nil
     end
+
+    -- Rebuild the networks tab to reflect changes
+    M.rebuild_networks_tab(player)
 end
 
 --- Refresh the network GUI (preserves position and selected tab)
@@ -1275,6 +1338,48 @@ function M.on_gui_click(event)
         return
     end
 
+    -- Remove item from global inventory tracking
+    if element.name == GUI.INVENTORY_EDIT_REMOVE then
+        local item_name = tags and tags.item_name
+        if item_name then
+            -- Remove from all tracking tables
+            storage.inventory[item_name] = nil
+            storage.limits[item_name] = nil
+            storage.previous_limits[item_name] = nil
+            -- Remove pins and HUD elements for all players
+            for _, pdata_entry in pairs(storage.player_data) do
+                if pdata_entry.pinned_items then
+                    pdata_entry.pinned_items[item_name] = nil
+                end
+                if pdata_entry.auto_pinned_items then
+                    pdata_entry.auto_pinned_items[item_name] = nil
+                end
+                -- Destroy HUD elements if they exist
+                if pdata_entry.pin_hud_elements and pdata_entry.pin_hud_elements[item_name] then
+                    local elems = pdata_entry.pin_hud_elements[item_name]
+                    if elems.flow and elems.flow.valid then elems.flow.destroy() end
+                    pdata_entry.pin_hud_elements[item_name] = nil
+                end
+                if pdata_entry.auto_pin_hud_elements and pdata_entry.auto_pin_hud_elements[item_name] then
+                    local elems = pdata_entry.auto_pin_hud_elements[item_name]
+                    if elems.flow and elems.flow.valid then elems.flow.destroy() end
+                    pdata_entry.auto_pin_hud_elements[item_name] = nil
+                end
+            end
+        end
+        M.destroy_inventory_edit_popup(player)
+        M.rebuild_inventory_tab(player)
+        -- Reopen network GUI
+        local pdata = state.get_player_data(player.index)
+        if pdata.opened_network_gui then
+            local frame = player.gui.screen[GUI.NETWORK_FRAME]
+            if frame then
+                player.opened = frame
+            end
+        end
+        return
+    end
+
     -- Confirm edit popup
     if element.name == GUI.INVENTORY_EDIT_CONFIRM then
         M.destroy_inventory_edit_popup(player)
@@ -1321,6 +1426,39 @@ function M.on_gui_click(event)
             local frame = player.gui.screen[GUI.NETWORK_FRAME]
             if frame then
                 player.opened = frame
+            end
+        end
+        return
+    end
+
+    -- Buffer add button
+    if element.name:find(GUI.NETWORK_BUFFER_ADD_BUTTON) then
+        if tags and tags.network_name then
+            local network_name = tags.network_name
+            local network = storage.networks[network_name]
+            if network then
+                local current = network.buffer_count or 1
+                if current < constants.MAX_BUFFER_COUNT then
+                    state.set_network_buffer_count(network_name, current + 1)
+                    -- Rebuild the networks tab to reflect the change
+                    M.rebuild_networks_tab(player)
+                end
+            end
+        end
+        return
+    end
+
+    -- Buffer remove button
+    if element.name:find(GUI.NETWORK_BUFFER_REMOVE_BUTTON) then
+        if tags and tags.network_name then
+            local network_name = tags.network_name
+            local network = storage.networks[network_name]
+            if network then
+                local current = network.buffer_count or 1
+                if current > 1 then
+                    state.remove_network_buffer(network_name)
+                    M.rebuild_networks_tab(player)
+                end
             end
         end
         return

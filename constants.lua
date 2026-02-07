@@ -73,6 +73,7 @@ M.GUI = {
     INVENTORY_EDIT_UNLIMITED_CB = "gn_inv_edit_unlimited",
     INVENTORY_EDIT_PIN_CB = "gn_inv_edit_pin",
     INVENTORY_EDIT_CONFIRM = "gn_inv_edit_confirm",
+    INVENTORY_EDIT_REMOVE = "gn_inv_edit_remove",
 
     -- HUD pins
     PIN_HUD_FRAME = "gn_pin_hud_frame",
@@ -107,6 +108,11 @@ M.GUI = {
     PIN_HUD_AUTO_HEADER = "gn_pin_hud_auto_header",
     AUTO_PIN_HUD_FLOW = "gn_auto_pin_hud_flow_",
     AUTO_PIN_HUD_LABEL = "gn_auto_pin_hud_label_",
+
+    -- Network buffer controls
+    NETWORK_BUFFER_LABEL = "gn_net_buf_label",         -- prefix + _network_name
+    NETWORK_BUFFER_ADD_BUTTON = "gn_net_buf_add",      -- prefix + _network_name
+    NETWORK_BUFFER_REMOVE_BUTTON = "gn_net_buf_rem",   -- prefix + _network_name
 }
 
 -- Processing
@@ -115,6 +121,12 @@ M.NETWORKS_PER_TICK = 20 -- networks processed per tick (round-robin)
 
 -- Limits
 M.UNLIMITED = -1  -- Special value: no limit (accept all)
+
+-- Copy-paste network naming
+M.COPY_PASTE_NETWORK_PREFIX = "Req:"  -- prefix for auto-generated ingredient networks
+
+-- Multi-buffer (inventory sharding)
+M.MAX_BUFFER_COUNT = 16       -- maximum buffers per network
 
 -- Auto-pin thresholds
 M.LOW_STOCK_THRESHOLD = 0.10  -- 10%

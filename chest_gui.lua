@@ -10,9 +10,9 @@ local GUI = constants.GUI
 --- The panel will automatically show/hide when the vanilla linked container GUI opens/closes
 ---@param player LuaPlayer
 function M.create_relative_panel(player)
-    -- Don't recreate if it already exists
+    -- Destroy and recreate to ensure latest layout
     if player.gui.relative[GUI.CHEST_RELATIVE_PANEL] then
-        return
+        player.gui.relative[GUI.CHEST_RELATIVE_PANEL].destroy()
     end
 
     -- Main frame anchored to the linked container GUI
@@ -27,6 +27,8 @@ function M.create_relative_panel(player)
             name = constants.GLOBAL_CHEST_ENTITY_NAME  -- Only show for our chest
         }
     })
+
+    frame.style.minimal_width = 380
 
     -- Inner frame for content
     local inner = frame.add({
@@ -92,7 +94,7 @@ function M.create_relative_panel(player)
         name = GUI.CHEST_NETWORK_ID_FIELD,
         text = ""
     })
-    network_field.style.width = 150
+    network_field.style.width = 220
 
     -- Row 2: Buttons (Validate + Cancel)
     local edit_row2 = edit_flow.add({
@@ -121,7 +123,7 @@ function M.create_relative_panel(player)
         name = GUI.CHEST_NETWORK_LIST_SCROLL,
         direction = "vertical"
     })
-    list_scroll.style.maximal_height = 120
+    list_scroll.style.maximal_height = 325
     list_scroll.style.horizontally_stretchable = true
 
     -- === Requests Section ===
@@ -137,15 +139,16 @@ function M.create_relative_panel(player)
         name = GUI.CHEST_REQUEST_SLOT_FLOW,
         direction = "vertical"
     })
-    requests_scroll.style.maximal_height = 200
+    requests_scroll.style.maximal_height = 300
     requests_scroll.style.horizontally_stretchable = true
 
     local requests_flow = requests_scroll.add({
-        type = "flow",
+        type = "table",
         name = "requests_flow",
-        direction = "horizontal"
+        column_count = 7
     })
     requests_flow.style.horizontal_spacing = 4
+    requests_flow.style.vertical_spacing = 4
 end
 
 --- Update the relative panel content with the current chest's data
@@ -170,7 +173,34 @@ function M.update(player, chest)
     if display_flow then
         local label = display_flow[GUI.CHEST_NETWORK_ID_LABEL]
         if label then
-            label.caption = network_name ~= "" and network_name or "[No network]"
+            local display_text = network_name ~= "" and network_name or "[No network]"
+            -- Append buffer info
+            if network then
+                local info_parts = {}
+                local buf_count = network.buffer_count or 1
+                if buf_count > 1 then
+                    -- Show which buffer this chest is on
+                    local chest_lid = chest.link_id
+                    local buf_idx = nil
+                    if network.link_ids then
+                        for i, lid in ipairs(network.link_ids) do
+                            if lid == chest_lid then
+                                buf_idx = i
+                                break
+                            end
+                        end
+                    end
+                    if buf_idx then
+                        info_parts[#info_parts + 1] = "buf " .. buf_idx .. "/" .. buf_count
+                    else
+                        info_parts[#info_parts + 1] = "×" .. buf_count .. " buf"
+                    end
+                end
+                if #info_parts > 0 then
+                    display_text = display_text .. "  [color=yellow][" .. table.concat(info_parts, ", ") .. "][/color]"
+                end
+            end
+            label.caption = display_text
         end
     end
 
@@ -266,6 +296,12 @@ function M.create_single_slot(parent, index, item_name, min, max)
             tags = { slot_index = index, item_name = nil }
         })
         slot.style.size = 40
+
+        -- Spacer labels to match height of filled slots
+        local spacer1 = slot_flow.add({ type = "label", caption = "" })
+        spacer1.style.font = "default-small"
+        local spacer2 = slot_flow.add({ type = "label", caption = "" })
+        spacer2.style.font = "default-small"
     end
 end
 
