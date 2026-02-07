@@ -1,3 +1,149 @@
+Original mod description further down.
+
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+!!!!!!!!!!!!!!  With some help from AI, these are the changes:   !!!!!!!!!!!!!!!!!
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+With some help from AI, these are the changes:
+
+# Feature: Multi-buffer networks, copy-paste configuration, configurable chest size, and UI improvements
+
+**v0.1.2 → v0.3.2**
+
+This PR adds several features to improve throughput and usability for large bases, along with UI sizing improvements and minor code quality fixes. No changes to the core processing model — the processor still uses the same fixed 20-networks-per-cycle round-robin and processes all provider chests every cycle.
+
+---
+
+## Changes
+
+### 1. Sequential link_id allocation (replaces hash-based)
+
+**Problem:** The original `get_link_id()` uses a hash function on the network name. Hash collisions are possible — two different network names could produce the same `link_id`, causing unrelated networks to silently share inventory.
+
+**Solution:** Replace with a monotonically incrementing counter (`storage.next_link_id`). Each new network gets the next integer, starting at 1. Collisions are impossible.
+
+**Files changed:** `state.lua`
+- `get_link_id(name)` (hash function) → `allocate_link_id()` (sequential counter)
+- `init()` rebuilds the reverse mapping (`link_id_to_network`) from existing networks on load and ensures the counter stays ahead of all allocated IDs
+
+### 2. Multi-buffer networks (inventory sharding)
+
+**Problem:** Each network has a single linked inventory shared by all its chests. For megabases with hundreds of chests on one network, this single inventory becomes a throughput bottleneck — all chests contend for the same slots.
+
+**Solution:** Networks can now have multiple `link_id`s (buffers). Chests are distributed across buffers in round-robin when placed. The processor iterates all buffers for each network. Users add/remove buffers via `[+]`/`[-]` buttons in the Networks tab.
+
+**Performance impact:** For single-buffer networks (the default and vast majority), the only overhead vs. the original is one `ipairs()` call over a 1-element table — negligible compared to the engine-side `get_linked_inventory()` and `get_contents()` calls that dominate per-network cost. Multi-buffer networks scale linearly with buffer count (N buffers = N× engine calls), which is the expected trade-off for throughput.
+
+**Files changed:**
+- `state.lua` — New fields on networks: `link_ids` (array), `buffer_count`, `next_buffer_assign`. New functions: `set_network_buffer_count()`, `remove_network_buffer()`, `get_next_buffer_link_id()`
+- `processor.lua` — Extracted `process_single_buffer()` from the inline processing code. `process_network()` iterates `network.link_ids`. Also caches `storage.inventory`/`storage.limits` as locals for minor Lua performance gain
+- `network.lua` — `set_chest_network()` uses `get_next_buffer_link_id()` for round-robin buffer assignment. Now returns `boolean` instead of `nil`
+- `network_gui.lua` — Buffers column in Networks tab with `[+]`/`[-]` buttons. New `rebuild_networks_tab()` function
+- `chest_gui.lua` — Shows which buffer a chest belongs to (e.g., `buf 2/3`) in the network name display
+- `constants.lua` — New constants: `MAX_BUFFER_COUNT`, GUI element names for buffer controls
+- `locale/en/locale.cfg` — New strings: `gn-buffers`, `gn-buffer-add-tooltip`, `gn-buffer-remove-tooltip`
+
+### 3. Copy-paste from assemblers auto-configures network by ingredients
+
+**Problem:** Setting up a chest for an assembler requires manually typing a network name and adding item requests one by one.
+
+**Solution:** Copy-paste (Shift+click) from an assembling machine or furnace to a global chest now:
+1. Creates a network named by sorted ingredients (e.g., `Req:copper-cable+iron-plate` for electronic circuits)
+2. Sets item requests to one stack size each (min = max = stack_size) — only for brand new networks, not existing ones
+3. Sets the inventory bar to limit slots to the number of ingredients + 1
+
+**Files changed:**
+- `events.lua` — New `build_ingredient_network_name()` function. `on_entity_settings_pasted()` uses ingredient-based names instead of recipe names
+- `constants.lua` — New constant: `COPY_PASTE_NETWORK_PREFIX`
+
+### 4. Configurable chest inventory size (startup setting)
+
+**Problem:** Chest inventory size is hardcoded.
+
+**Solution:** New startup setting `global-storage-chest-slots` (default 48, range 1–256) controls the number of inventory slots in each global chest.
+
+**New file:** `settings.lua`
+**Files changed:**
+- `data.lua` — Reads `settings.startup["global-storage-chest-slots"].value` to set `inventory_size`
+- `locale/en/locale.cfg` — New strings: `global-storage-chest-slots` name and description
+
+### 5. Remove items from global inventory
+
+**Problem:** Items that accidentally enter the global pool (e.g., upgrade-planner, blueprints, or other non-storable items) cannot be removed from the Global Inventory list. They stay visible with 0 stock forever.
+
+**Solution:** A red "Remove" button in the item edit popup (the dialog opened by clicking an item in the Global Inventory tab). Clicking it removes the item from `storage.inventory`, `storage.limits`, and `storage.previous_limits`, clears any HUD pins for that item across all players, and destroys associated HUD elements immediately. The item will only reappear if the processor finds it physically present in a linked chest again.
+
+**Files changed:**
+- `network_gui.lua` — New click handler for `INVENTORY_EDIT_REMOVE` button. Red button added to the item edit popup beside the OK button
+- `constants.lua` — New constant: `INVENTORY_EDIT_REMOVE`
+- `locale/en/locale.cfg` — New strings: `gn-remove-item`, `gn-remove-item-tooltip`
+
+### 6. UI sizing improvements
+
+**Problem:** The chest-relative "Global Network" panel and the Shift+G "Global Network" menu are too small for comfortable use with many networks, requests, or inventory items.
+
+**Solution:**
+
+**Chest panel (relative GUI, right side of chest):**
+- Outer frame minimum width: 380px (was unconstrained/content-driven)
+- Network name textfield: 220px (was 150px)
+- Network list scroll when editing: 325px height (was 120px) — shows many more networks
+- Requests scroll area: 300px height (was 200px)
+- Requests layout changed from horizontal flow to 7-column wrapping table — items wrap into rows instead of extending off-screen
+- Empty request slots now include spacer labels matching filled-slot height for proper grid alignment
+- Panel always destroys and recreates on join/config change so layout updates apply to existing saves
+
+**Shift+G menu (Global Network window):**
+- Frame minimum width: 550px (was 500px)
+- Networks tab scroll: 600px height (was 400px)
+- Inventory tab scroll: 600px height, 520px width (was 400px/480px)
+
+**Files changed:**
+- `chest_gui.lua` — Width, height, layout changes as described above. Panel recreation on every `create_relative_panel` call
+- `network_gui.lua` — Frame width, scroll heights and widths increased
+
+### 7. Minor code quality fixes
+
+- Removed duplicate `local player_data` variable declarations in `events.lua` `on_gui_closed` (shadowed outer variable, caused redundant `get_player_data()` calls)
+- Removed empty migration block in `control.lua` `on_configuration_changed`
+- Cleaned up stale comments
+
+---
+
+## Files changed summary
+
+| File | Change type |
+|---|---|
+| `settings.lua` | **New** — startup setting for chest inventory size |
+| `processor.lua` | Modified — extracted `process_single_buffer()`, multi-buffer iteration, local caching |
+| `state.lua` | Modified — sequential link_id allocation, buffer management functions, network fields |
+| `events.lua` | Modified — ingredient-based copy-paste naming, removed duplicate variable |
+| `network.lua` | Modified — round-robin buffer assignment in `set_chest_network()` |
+| `network_gui.lua` | Modified — buffer controls, remove-item button, UI sizing |
+| `chest_gui.lua` | Modified — buffer info display, UI sizing, request grid layout, panel recreation |
+| `constants.lua` | Modified — new constants for buffers, copy-paste, remove button, GUI elements |
+| `data.lua` | Modified — reads chest-slots setting |
+| `control.lua` | Modified — removed empty migration block |
+| `locale/en/locale.cfg` | Modified — new localization strings |
+| `info.json` | Modified — version bump |
+
+---
+
+## Not changed
+
+- Core processing model (20 networks/cycle round-robin, all providers every cycle)
+- `data-final-fixes.lua`
+- `provider_gui.lua`
+- `player_logistics.lua`
+- `thumbnail.png`
+
+
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+!!!!!!!!!!!!!!!!!!!!!!!!    Original mod description:     !!!!!!!!!!!!!!!!!!!!!!!!
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+
+
 # Global Network
 
 A global item storage and logistics system for Factorio 2.0+. Manage a centralized inventory pool with network-based requests, perfect for megabases.
