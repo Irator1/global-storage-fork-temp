@@ -1,6 +1,7 @@
 local constants = require("constants")
 local state = require("state")
 local network_module = require("network")
+local quality = require("quality")
 
 local M = {}
 
@@ -232,13 +233,13 @@ end
 function M.create_request_slots(parent, requests)
     -- Convert requests dict to array
     local request_list = {}
-    for item_name, req in pairs(requests) do
-        table.insert(request_list, { item = item_name, min = req.min, max = req.max })
+    for item_key, req in pairs(requests) do
+        table.insert(request_list, { item_key = item_key, min = req.min, max = req.max })
     end
 
     -- Create slots for existing requests
     for i, req in ipairs(request_list) do
-        M.create_single_slot(parent, i, req.item, req.min, req.max)
+        M.create_single_slot(parent, i, req.item_key, req.min, req.max)
     end
 
     -- Always add one empty slot at the end
@@ -249,10 +250,10 @@ end
 --- Create a single request slot
 ---@param parent LuaGuiElement
 ---@param index number
----@param item_name string|nil
+---@param item_key string|nil Composite key (e.g. "iron-plate" or "iron-plate:rare")
 ---@param min number|nil
 ---@param max number|nil
-function M.create_single_slot(parent, index, item_name, min, max)
+function M.create_single_slot(parent, index, item_key, min, max)
     local slot_flow = parent.add({
         type = "flow",
         direction = "vertical"
@@ -260,16 +261,25 @@ function M.create_single_slot(parent, index, item_name, min, max)
     slot_flow.style.horizontal_align = "center"
     slot_flow.style.vertical_spacing = 0
 
-    if item_name then
+    if item_key then
         -- EXISTING REQUEST: sprite-button (click opens popup min/max directly)
+        local item_name = quality.get_name(item_key)
+        local item_quality = quality.get_quality(item_key)
+        local tooltip_text = quality.tooltip(item_key) .. "\nLeft-click: Edit min/max\nRight-click: Delete"
+
         local slot = slot_flow.add({
             type = "sprite-button",
             name = GUI.CHEST_REQUEST_SPRITE_BUTTON .. "_" .. index,
             sprite = "item/" .. item_name,
-            tooltip = item_name .. "\nLeft-click: Edit min/max\nRight-click: Delete",
-            tags = { slot_index = index, item_name = item_name, min = min, max = max }
+            tooltip = tooltip_text,
+            tags = { slot_index = index, item_key = item_key, min = min, max = max }
         })
         slot.style.size = 40
+
+        -- Native quality indicator (small icon in bottom-left corner)
+        if item_quality ~= "normal" then
+            slot.quality = item_quality
+        end
 
         -- Show min under the slot (green)
         local min_label = slot_flow.add({
@@ -287,13 +297,12 @@ function M.create_single_slot(parent, index, item_name, min, max)
         max_label.style.font = "default-small"
         max_label.style.font_color = {1, 0.5, 0}
     else
-        -- EMPTY SLOT: choose-elem-button (opens item selector)
+        -- EMPTY SLOT: choose-elem-button with quality selector (opens item+quality selector)
         local slot = slot_flow.add({
             type = "choose-elem-button",
             name = GUI.CHEST_REQUEST_SLOT .. "_" .. index,
-            elem_type = "item",
-            item = nil,
-            tags = { slot_index = index, item_name = nil }
+            elem_type = "item-with-quality",
+            tags = { slot_index = index, item_key = nil }
         })
         slot.style.size = 40
 
@@ -363,19 +372,21 @@ function M.update_live(player)
     for _, slot_flow in pairs(requests_flow.children) do
         if slot_flow.type == "flow" then
             local slot_button = slot_flow.children[1]
-            if slot_button and slot_button.tags and slot_button.tags.item_name then
-                local item_name = slot_button.tags.item_name
-                local req = requests[item_name]
+            if slot_button and slot_button.tags and slot_button.tags.item_key then
+                local item_key = slot_button.tags.item_key
+                local req = requests[item_key]
                 if req then
-                    -- Update min label (child 2)
-                    local min_label = slot_flow.children[2]
-                    if min_label and min_label.type == "label" then
-                        min_label.caption = tostring(req.min or 0)
+                    -- Find min and max labels (they're the last two label children)
+                    local labels = {}
+                    for _, child in pairs(slot_flow.children) do
+                        if child.type == "label" then
+                            labels[#labels + 1] = child
+                        end
                     end
-                    -- Update max label (child 3)
-                    local max_label = slot_flow.children[3]
-                    if max_label and max_label.type == "label" then
-                        max_label.caption = tostring(req.max or 0)
+                    -- Last two labels are min and max
+                    if #labels >= 2 then
+                        labels[#labels - 1].caption = tostring(req.min or 0)
+                        labels[#labels].caption = tostring(req.max or 0)
                     end
                 end
             end
@@ -422,11 +433,13 @@ function M.populate_network_list(edit_flow)
             type = "button",
             name = GUI.CHEST_NETWORK_LIST_BUTTON .. "_" .. name,
             caption = name,
+            tooltip = name,
             style = "list_box_item",
             tags = { network_name = name }
         })
         btn.style.horizontally_stretchable = true
         btn.style.horizontal_align = "left"
+        btn.style.maximal_width = 300
     end
 
     -- Show message if no manual networks exist
@@ -480,10 +493,10 @@ end
 --- Open the min/max popup for a request slot
 ---@param player LuaPlayer
 ---@param slot_index number
----@param item_name string
+---@param item_key string Composite key (e.g. "iron-plate" or "iron-plate:rare")
 ---@param current_min number|nil
 ---@param current_max number|nil
-function M.open_request_popup(player, slot_index, item_name, current_min, current_max)
+function M.open_request_popup(player, slot_index, item_key, current_min, current_max)
     M.destroy_popup(player)
 
     -- Store the chest unit_number so we can re-open it when popup closes
@@ -494,6 +507,8 @@ function M.open_request_popup(player, slot_index, item_name, current_min, curren
     local min_val = current_min or 100
     local max_val = current_max or 200
 
+    local item_name = quality.get_name(item_key)
+
     local popup = player.gui.screen.add({
         type = "frame",
         name = GUI.CHEST_REQUEST_POPUP,
@@ -501,7 +516,7 @@ function M.open_request_popup(player, slot_index, item_name, current_min, curren
         direction = "vertical"
     })
     popup.auto_center = true
-    popup.tags = { slot_index = slot_index, item_name = item_name, chest_unit_number = chest_unit_number }
+    popup.tags = { slot_index = slot_index, item_key = item_key, chest_unit_number = chest_unit_number }
 
     -- Item display
     local item_flow = popup.add({
@@ -514,9 +529,9 @@ function M.open_request_popup(player, slot_index, item_name, current_min, curren
         type = "sprite",
         sprite = "item/" .. item_name
     })
-    item_flow.add({
+    local caption_label = item_flow.add({
         type = "label",
-        caption = item_name
+        caption = quality.tooltip(item_key)
     })
 
     -- Min: slider + textfield
@@ -694,11 +709,11 @@ function M.on_gui_click(event)
 
         if event.button == defines.mouse_button_type.right then
             -- Right-click: delete request
-            network_module.remove_request(network_name, tags.item_name)
+            network_module.remove_request(network_name, tags.item_key)
             M.refresh(player)
         else
             -- Left-click: open min/max popup
-            M.open_request_popup(player, tags.slot_index, tags.item_name, tags.min, tags.max)
+            M.open_request_popup(player, tags.slot_index, tags.item_key, tags.min, tags.max)
         end
         return
     end
@@ -710,10 +725,10 @@ function M.on_gui_click(event)
         local popup = player.gui.screen[GUI.CHEST_REQUEST_POPUP]
         if not popup then return end
 
-        local item_name = popup.tags.item_name
+        local item_key = popup.tags.item_key
         local network_name = network_module.get_chest_network_name(chest)
 
-        if network_name and item_name then
+        if network_name and item_key then
             -- Find min/max values
             local min_value = 100
             local max_value = 200
@@ -731,7 +746,7 @@ function M.on_gui_click(event)
                 end
             end
 
-            network_module.set_request(network_name, item_name, min_value, max_value)
+            network_module.set_request(network_name, item_key, min_value, max_value)
         end
 
         M.destroy_popup(player)
@@ -769,25 +784,26 @@ function M.on_gui_elem_changed(event)
         return
     end
 
-    local item_name = element.elem_value
-    local old_item = element.tags.item_name
+    -- elem_value is a table {name=string, quality=string} for item-with-quality, or nil
+    local item_key = quality.key_from_elem_value(element.elem_value)
+    local old_item_key = element.tags.item_key
 
-    if item_name then
+    if item_key then
         -- Item was selected - open popup for min/max
         local network = storage.networks[network_name]
-        local existing = network and network.requests[item_name]
+        local existing = network and network.requests[item_key]
 
         M.open_request_popup(
             player,
             element.tags.slot_index,
-            item_name,
+            item_key,
             existing and existing.min,
             existing and existing.max
         )
     else
         -- Item was cleared - remove the request
-        if old_item then
-            network_module.remove_request(network_name, old_item)
+        if old_item_key then
+            network_module.remove_request(network_name, old_item_key)
             M.refresh(player)
         end
     end
@@ -912,10 +928,10 @@ function M.on_gui_confirmed(event)
     local popup = player.gui.screen[GUI.CHEST_REQUEST_POPUP]
     if not popup then return end
 
-    local item_name = popup.tags.item_name
+    local item_key = popup.tags.item_key
     local network_name = network_module.get_chest_network_name(chest)
 
-    if network_name and item_name then
+    if network_name and item_key then
         -- Find min/max values
         local min_value = 100
         local max_value = 200
@@ -933,7 +949,7 @@ function M.on_gui_confirmed(event)
             end
         end
 
-        network_module.set_request(network_name, item_name, min_value, max_value)
+        network_module.set_request(network_name, item_key, min_value, max_value)
     end
 
     M.destroy_popup(player)

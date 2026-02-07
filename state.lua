@@ -1,4 +1,5 @@
 local constants = require("constants")
+local quality = require("quality")
 
 local M = {}
 
@@ -158,12 +159,12 @@ function M.delete_network(name, force)
             if linked_inv then
                 local contents = linked_inv.get_contents()
                 for _, item in pairs(contents) do
-                    local item_name = item.name
+                    local item_key = quality.key_from_contents(item)
                     local count = item.count
-                    local current = storage.inventory[item_name] or 0
+                    local current = storage.inventory[item_key] or 0
                     -- Bypass limits on deletion: never lose items
-                    storage.inventory[item_name] = current + count
-                    linked_inv.remove({ name = item_name, count = count })
+                    storage.inventory[item_key] = current + count
+                    linked_inv.remove(quality.make_stack(item_key, count))
                 end
             end
             -- Remove reverse mapping for this link_id
@@ -214,8 +215,9 @@ function M.remove_network_buffer(name)
             local contents = linked_inv.get_contents()
             for _, item in pairs(contents) do
                 -- Bypass limits: never lose items during buffer removal
-                storage.inventory[item.name] = (storage.inventory[item.name] or 0) + item.count
-                linked_inv.remove({ name = item.name, count = item.count })
+                local item_key = quality.key_from_contents(item)
+                storage.inventory[item_key] = (storage.inventory[item_key] or 0) + item.count
+                linked_inv.remove(quality.make_stack(item_key, item.count))
             end
         end
     end

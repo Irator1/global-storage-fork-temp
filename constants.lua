@@ -25,8 +25,6 @@ M.GUI = {
     CHEST_REQUEST_SLOT = "gn_chest_request_slot",
     CHEST_REQUEST_SPRITE_BUTTON = "gn_chest_request_sprite",
     CHEST_REQUEST_SLOT_FLOW = "gn_chest_request_slot_flow",
-    CHEST_CONTENTS_SCROLL = "gn_chest_contents_scroll",
-    CHEST_CONTENTS_TABLE = "gn_chest_contents_table",
 
     -- Request popup
     CHEST_REQUEST_POPUP = "gn_chest_request_popup",
@@ -49,16 +47,11 @@ M.GUI = {
 
     -- Global inventory tab
     INVENTORY_TAB = "gn_inventory_tab",
-    INVENTORY_TABLE = "gn_inventory_table",
     INVENTORY_SCROLL = "gn_inventory_scroll",
     INVENTORY_ADD_LIMIT_BUTTON = "gn_inventory_add_limit",
-    INVENTORY_LIMIT_FIELD = "gn_inventory_limit",
-    INVENTORY_UNLIMITED_CHECKBOX = "gn_inventory_unlimited",
-    INVENTORY_SET_LIMIT_BUTTON = "gn_inventory_set_limit",
     INVENTORY_FILTER_NO_LIMIT_CHECKBOX = "gn_inventory_filter_no_limit",
 
     -- Dynamic element prefixes (for live updates)
-    INVENTORY_QUANTITY_LABEL = "gn_inv_qty_",
     NETWORK_CHEST_COUNT_LABEL = "gn_net_chests_",
     NETWORK_REQUEST_COUNT_LABEL = "gn_net_reqs_",
     NETWORK_STATUS_LABEL = "gn_net_status_",

@@ -1,5 +1,6 @@
 local constants = require("constants")
 local state = require("state")
+local quality = require("quality")
 
 local M = {}
 
@@ -91,13 +92,13 @@ end
 function M.create_request_slots(parent, requests)
     -- Convert requests dict to array
     local request_list = {}
-    for item_name, quantity in pairs(requests) do
-        table.insert(request_list, { item = item_name, quantity = quantity })
+    for item_key, quantity in pairs(requests) do
+        table.insert(request_list, { item_key = item_key, quantity = quantity })
     end
 
     -- Create slots for existing requests
     for i, req in ipairs(request_list) do
-        M.create_single_slot(parent, i, req.item, req.quantity)
+        M.create_single_slot(parent, i, req.item_key, req.quantity)
     end
 
     -- Always add one empty slot at the end
@@ -108,9 +109,9 @@ end
 --- Create a single request slot
 ---@param parent LuaGuiElement
 ---@param index number
----@param item_name string|nil
+---@param item_key string|nil Composite key
 ---@param quantity number|nil
-function M.create_single_slot(parent, index, item_name, quantity)
+function M.create_single_slot(parent, index, item_key, quantity)
     local slot_flow = parent.add({
         type = "flow",
         direction = "vertical"
@@ -118,16 +119,25 @@ function M.create_single_slot(parent, index, item_name, quantity)
     slot_flow.style.horizontal_align = "center"
     slot_flow.style.vertical_spacing = 0
 
-    if item_name then
+    if item_key then
         -- EXISTING REQUEST: sprite-button (click opens popup for quantity)
+        local item_name = quality.get_name(item_key)
+        local item_quality = quality.get_quality(item_key)
+        local tooltip_text = quality.tooltip(item_key) .. "\nLeft-click: Edit quantity\nRight-click: Delete"
+
         local slot = slot_flow.add({
             type = "sprite-button",
             name = GUI.PROVIDER_REQUEST_SPRITE_BUTTON .. "_" .. index,
             sprite = "item/" .. item_name,
-            tooltip = item_name .. "\nLeft-click: Edit quantity\nRight-click: Delete",
-            tags = { slot_index = index, item_name = item_name, quantity = quantity }
+            tooltip = tooltip_text,
+            tags = { slot_index = index, item_key = item_key, quantity = quantity }
         })
         slot.style.size = 40
+
+        -- Native quality indicator (small icon in bottom-left corner)
+        if item_quality ~= "normal" then
+            slot.quality = item_quality
+        end
 
         -- Show quantity under the slot
         local qty_label = slot_flow.add({
@@ -137,13 +147,12 @@ function M.create_single_slot(parent, index, item_name, quantity)
         qty_label.style.font = "default-small"
         qty_label.style.font_color = {0, 1, 0}
     else
-        -- EMPTY SLOT: choose-elem-button (opens item selector)
+        -- EMPTY SLOT: choose-elem-button with quality selector
         local slot = slot_flow.add({
             type = "choose-elem-button",
             name = GUI.PROVIDER_REQUEST_SLOT .. "_" .. index,
-            elem_type = "item",
-            item = nil,
-            tags = { slot_index = index, item_name = nil }
+            elem_type = "item-with-quality",
+            tags = { slot_index = index, item_key = nil }
         })
         slot.style.size = 40
     end
@@ -203,14 +212,19 @@ function M.update_live(player)
     for _, slot_flow in pairs(requests_flow.children) do
         if slot_flow.type == "flow" then
             local slot_button = slot_flow.children[1]
-            if slot_button and slot_button.tags and slot_button.tags.item_name then
-                local item_name = slot_button.tags.item_name
-                local quantity = requests[item_name]
-                if quantity then
-                    -- Update quantity label (child 2)
-                    local qty_label = slot_flow.children[2]
-                    if qty_label and qty_label.type == "label" then
-                        qty_label.caption = tostring(quantity)
+            if slot_button and slot_button.tags and slot_button.tags.item_key then
+                local item_key = slot_button.tags.item_key
+                local qty = requests[item_key]
+                if qty then
+                    -- Find quantity label (last label child)
+                    local labels = {}
+                    for _, child in pairs(slot_flow.children) do
+                        if child.type == "label" then
+                            labels[#labels + 1] = child
+                        end
+                    end
+                    if #labels > 0 then
+                        labels[#labels].caption = tostring(qty)
                     end
                 end
             end
@@ -221,15 +235,17 @@ end
 --- Open the quantity popup for a request slot
 ---@param player LuaPlayer
 ---@param slot_index number
----@param item_name string
+---@param item_key string Composite key
 ---@param current_quantity number|nil
-function M.open_request_popup(player, slot_index, item_name, current_quantity)
+function M.open_request_popup(player, slot_index, item_key, current_quantity)
     M.destroy_popup(player)
 
     -- Store the chest unit_number so we can re-open it when popup closes
     local player_data = state.get_player_data(player.index)
     local chest = player_data.opened_provider_chest
     local chest_unit_number = chest and chest.valid and chest.unit_number or nil
+
+    local item_name = quality.get_name(item_key)
 
     -- Default to stack size
     local stack_size = prototypes.item[item_name] and prototypes.item[item_name].stack_size or 200
@@ -242,7 +258,7 @@ function M.open_request_popup(player, slot_index, item_name, current_quantity)
         direction = "vertical"
     })
     popup.auto_center = true
-    popup.tags = { slot_index = slot_index, item_name = item_name, chest_unit_number = chest_unit_number }
+    popup.tags = { slot_index = slot_index, item_key = item_key, chest_unit_number = chest_unit_number }
 
     -- Item display
     local item_flow = popup.add({
@@ -257,7 +273,7 @@ function M.open_request_popup(player, slot_index, item_name, current_quantity)
     })
     item_flow.add({
         type = "label",
-        caption = item_name
+        caption = quality.tooltip(item_key)
     })
 
     -- Quantity: slider + textfield
@@ -351,11 +367,11 @@ function M.on_gui_click(event)
 
         if event.button == defines.mouse_button_type.right then
             -- Right-click: delete request
-            state.remove_provider_request(chest.unit_number, tags.item_name)
+            state.remove_provider_request(chest.unit_number, tags.item_key)
             M.refresh(player)
         else
             -- Left-click: open quantity popup
-            M.open_request_popup(player, tags.slot_index, tags.item_name, tags.quantity)
+            M.open_request_popup(player, tags.slot_index, tags.item_key, tags.quantity)
         end
         return
     end
@@ -365,24 +381,25 @@ function M.on_gui_click(event)
         local popup = player.gui.screen[GUI.PROVIDER_REQUEST_POPUP]
         if not popup then return end
 
-        local item_name = popup.tags.item_name
+        local item_key = popup.tags.item_key
         local chest_unit_number = popup.tags.chest_unit_number
 
-        if item_name and chest_unit_number then
+        if item_key and chest_unit_number then
             -- Find quantity value
+            local item_name = quality.get_name(item_key)
             local stack_size = prototypes.item[item_name] and prototypes.item[item_name].stack_size or 200
-            local quantity = stack_size
+            local qty = stack_size
 
             for _, child in pairs(popup.children) do
                 if child.type == "flow" then
                     local qty_field = child[GUI.PROVIDER_REQUEST_QUANTITY_FIELD]
                     if qty_field then
-                        quantity = tonumber(qty_field.text) or stack_size
+                        qty = tonumber(qty_field.text) or stack_size
                     end
                 end
             end
 
-            state.set_provider_request(chest_unit_number, item_name, quantity)
+            state.set_provider_request(chest_unit_number, item_key, qty)
         end
 
         M.destroy_popup(player)
@@ -412,24 +429,25 @@ function M.on_gui_elem_changed(event)
     local chest = player_data.opened_provider_chest
     if not chest or not chest.valid then return end
 
-    local item_name = element.elem_value
-    local old_item = element.tags.item_name
+    -- elem_value is a table {name=string, quality=string} for item-with-quality, or nil
+    local item_key = quality.key_from_elem_value(element.elem_value)
+    local old_item_key = element.tags.item_key
 
-    if item_name then
+    if item_key then
         -- Item was selected - open popup for quantity
         local provider_data = state.get_provider_data(chest.unit_number)
-        local existing = provider_data and provider_data.requests[item_name]
+        local existing = provider_data and provider_data.requests[item_key]
 
         M.open_request_popup(
             player,
             element.tags.slot_index,
-            item_name,
+            item_key,
             existing
         )
     else
         -- Item was cleared - remove the request
-        if old_item then
-            state.remove_provider_request(chest.unit_number, old_item)
+        if old_item_key then
+            state.remove_provider_request(chest.unit_number, old_item_key)
             M.refresh(player)
         end
     end
@@ -498,24 +516,25 @@ function M.on_gui_confirmed(event)
     local popup = player.gui.screen[GUI.PROVIDER_REQUEST_POPUP]
     if not popup then return end
 
-    local item_name = popup.tags.item_name
+    local item_key = popup.tags.item_key
     local chest_unit_number = popup.tags.chest_unit_number
 
-    if item_name and chest_unit_number then
+    if item_key and chest_unit_number then
         -- Find quantity value
+        local item_name = quality.get_name(item_key)
         local stack_size = prototypes.item[item_name] and prototypes.item[item_name].stack_size or 200
-        local quantity = stack_size
+        local qty = stack_size
 
         for _, child in pairs(popup.children) do
             if child.type == "flow" then
                 local qty_field = child[GUI.PROVIDER_REQUEST_QUANTITY_FIELD]
                 if qty_field then
-                    quantity = tonumber(qty_field.text) or stack_size
+                    qty = tonumber(qty_field.text) or stack_size
                 end
             end
         end
 
-        state.set_provider_request(chest_unit_number, item_name, quantity)
+        state.set_provider_request(chest_unit_number, item_key, qty)
     end
 
     M.destroy_popup(player)

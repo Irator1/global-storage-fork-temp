@@ -1,5 +1,6 @@
 local constants = require("constants")
 local player_logistics = require("player_logistics")
+local quality = require("quality")
 
 local M = {}
 
@@ -9,34 +10,35 @@ local ENTITY_NAME = constants.GLOBAL_CHEST_ENTITY_NAME
 
 --- Process a single linked inventory: collect surplus and distribute to meet requests
 ---@param linked_inv LuaInventory
----@param requests table Network requests {item_name = {min, max}}
+---@param requests table Network requests {item_key = {min, max}}
 ---@param inv table Reference to storage.inventory
 ---@param limits table Reference to storage.limits
 local function process_single_buffer(linked_inv, requests, inv, limits)
     local contents = linked_inv.get_contents()
 
-    -- Build a lookup table for faster access
+    -- Build a lookup table using quality-aware composite keys
     local content_counts = {}
     for _, item in pairs(contents) do
-        content_counts[item.name] = (content_counts[item.name] or 0) + item.count
+        local key = quality.key_from_contents(item)
+        content_counts[key] = (content_counts[key] or 0) + item.count
     end
 
     -- 1. Collect surplus (items above max or not in requests)
-    for item_name, count in pairs(content_counts) do
-        local request = requests[item_name]
+    for item_key, count in pairs(content_counts) do
+        local request = requests[item_key]
         local max_wanted = request and request.max or 0
 
         if count > max_wanted then
             local surplus = count - max_wanted
 
             -- Check global limit (nil = blocked, -1 = unlimited, >0 = numeric limit)
-            local limit = limits[item_name]
-            local current_global = inv[item_name] or 0
+            local limit = limits[item_key]
+            local current_global = inv[item_key] or 0
 
             local can_accept = 0
             if limit == nil then
                 -- New item: create limit at 0 so it appears in GUI
-                limits[item_name] = 0
+                limits[item_key] = 0
                 can_accept = 0  -- Blocked until player sets a limit
             elseif limit == UNLIMITED then
                 can_accept = surplus  -- Unlimited
@@ -45,29 +47,29 @@ local function process_single_buffer(linked_inv, requests, inv, limits)
             end
 
             if can_accept > 0 then
-                local removed = linked_inv.remove({ name = item_name, count = can_accept })
+                local removed = linked_inv.remove(quality.make_stack(item_key, can_accept))
                 if removed > 0 then
-                    inv[item_name] = (inv[item_name] or 0) + removed
+                    inv[item_key] = (inv[item_key] or 0) + removed
                 end
             end
         end
     end
 
     -- 2. Distribute to meet minimum requests
-    for item_name, request in pairs(requests) do
-        local current = content_counts[item_name] or 0
+    for item_key, request in pairs(requests) do
+        local current = content_counts[item_key] or 0
 
         if current < request.min then
             local needed = request.min - current
-            local available = inv[item_name] or 0
+            local available = inv[item_key] or 0
             local to_insert = math.min(needed, available)
 
             if to_insert > 0 then
-                local inserted = linked_inv.insert({ name = item_name, count = to_insert })
+                local inserted = linked_inv.insert(quality.make_stack(item_key, to_insert))
                 if inserted > 0 then
-                    inv[item_name] = (inv[item_name] or 0) - inserted
-                    if inv[item_name] <= 0 then
-                        inv[item_name] = nil
+                    inv[item_key] = (inv[item_key] or 0) - inserted
+                    if inv[item_key] <= 0 then
+                        inv[item_key] = nil
                     end
                 end
             end
@@ -119,18 +121,18 @@ local function process_provider_chests(inv)
             local chest_inv = data.entity.get_inventory(defines.inventory.chest)
             if chest_inv then
                 -- Fill according to requests
-                for item_name, target in pairs(data.requests) do
-                    local current = chest_inv.get_item_count(item_name)
+                for item_key, target in pairs(data.requests) do
+                    local current = chest_inv.get_item_count(quality.make_filter(item_key))
                     local needed = target - current
-                    local available = inv[item_name] or 0
+                    local available = inv[item_key] or 0
 
                     if needed > 0 and available > 0 then
                         local to_insert = math.min(needed, available)
-                        local inserted = chest_inv.insert({name = item_name, count = to_insert})
+                        local inserted = chest_inv.insert(quality.make_stack(item_key, to_insert))
                         if inserted > 0 then
-                            inv[item_name] = inv[item_name] - inserted
-                            if inv[item_name] <= 0 then
-                                inv[item_name] = nil
+                            inv[item_key] = inv[item_key] - inserted
+                            if inv[item_key] <= 0 then
+                                inv[item_key] = nil
                             end
                         end
                     end

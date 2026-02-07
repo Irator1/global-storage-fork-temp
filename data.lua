@@ -14,6 +14,18 @@ global_chest_entity.name = constants.GLOBAL_CHEST_ENTITY_NAME
 global_chest_entity.inventory_type = "with_filters_and_bar"
 global_chest_entity.minable.result = global_chest_entity.name
 global_chest_entity.inventory_size = settings.startup["global-storage-chest-slots"].value
+global_chest_entity.hidden = false
+global_chest_entity.hidden_in_factoriopedia = false
+-- Clear any inherited "hidden" entity flags
+if global_chest_entity.flags then
+    local new_flags = {}
+    for _, flag in pairs(global_chest_entity.flags) do
+        if flag ~= "hidden" and flag ~= "not-deconstructable" and flag ~= "not-blueprintable" then
+            table.insert(new_flags, flag)
+        end
+    end
+    global_chest_entity.flags = new_flags
+end
 
 -- Item
 local global_chest_item = table.deepcopy(data.raw["item"]["linked-chest"])
@@ -21,6 +33,18 @@ global_chest_item.name = constants.GLOBAL_CHEST_ENTITY_NAME
 global_chest_item.place_result = global_chest_entity.name
 global_chest_item.subgroup = "global-storage"
 global_chest_item.order = "c[global-chest]"
+global_chest_item.hidden = false
+global_chest_item.hidden_in_factoriopedia = false
+-- Clear any inherited "hidden" item flags
+if global_chest_item.flags then
+    local new_flags = {}
+    for _, flag in pairs(global_chest_item.flags) do
+        if flag ~= "hidden" then
+            table.insert(new_flags, flag)
+        end
+    end
+    global_chest_item.flags = new_flags
+end
 
 -- Recipe
 local global_chest_recipe = {

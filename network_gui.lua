@@ -1,6 +1,7 @@
 local constants = require("constants")
 local state = require("state")
 local network_module = require("network")
+local quality = require("quality")
 
 local M = {}
 
@@ -82,6 +83,7 @@ function M.create(player)
     })
     frame.auto_center = true
     frame.style.minimal_width = 550
+    frame.style.maximal_width = 700
 
     -- Tabbed pane
     local tabbed_pane = frame.add({
@@ -179,12 +181,14 @@ function M.build_networks_tab(parent, player)
         local chest_count = network.chest_count or 0
         local is_ghost = chest_count == 0
 
-        -- Network name
-        networks_table.add({
+        -- Network name (truncated with tooltip for long names)
+        local name_label = networks_table.add({
             type = "label",
             name = "gn_net_name_" .. network_name,
-            caption = network_name
+            caption = network_name,
+            tooltip = network_name
         })
+        name_label.style.maximal_width = 250
 
         -- Requests count
         local reqs_label = networks_table.add({
@@ -373,18 +377,21 @@ function M.build_inventory_tab(parent, player)
     add_flow.add({
         type = "choose-elem-button",
         name = GUI.INVENTORY_ADD_LIMIT_BUTTON,
-        elem_type = "item"
+        elem_type = "item-with-quality"
     })
 end
 
 --- Add a single cell to the inventory grid
 ---@param grid LuaGuiElement
----@param item_name string
+---@param item_key string Composite key (e.g. "iron-plate" or "iron-plate:rare")
 ---@param pdata table Player data
-function M.add_grid_cell(grid, item_name, pdata)
-    local quantity = storage.inventory[item_name] or 0
-    local limit = storage.limits[item_name]
-    local is_pinned = pdata.pinned_items[item_name] or false
+function M.add_grid_cell(grid, item_key, pdata)
+    local quantity = storage.inventory[item_key] or 0
+    local limit = storage.limits[item_key]
+    local is_pinned = pdata.pinned_items[item_key] or false
+
+    local base_name = quality.get_name(item_key)
+    local item_quality = quality.get_quality(item_key)
 
     -- Cell container
     local cell = grid.add({
@@ -404,16 +411,23 @@ function M.add_grid_cell(grid, item_name, pdata)
         status_text = "[color=red]Blocked[/color]"
     end
 
+    local display_name = quality.tooltip(item_key)
+
     -- Item button (clickable to open popup)
     local button = cell.add({
         type = "sprite-button",
-        name = GUI.INVENTORY_GRID_CELL .. item_name,
-        sprite = "item/" .. item_name,
-        tooltip = item_name .. "\n" .. status_text .. (is_pinned and "\n[Pinned]" or "") .. "\nClick to edit",
-        tags = { item_name = item_name },
+        name = GUI.INVENTORY_GRID_CELL .. quality.gui_name(item_key),
+        sprite = "item/" .. base_name,
+        tooltip = display_name .. "\n" .. status_text .. (is_pinned and "\n[Pinned]" or "") .. "\nClick to edit",
+        tags = { item_key = item_key },
         style = "slot_button"
     })
     button.style.size = 40
+
+    -- Native quality indicator (small icon in bottom-left corner)
+    if item_quality ~= "normal" then
+        button.quality = item_quality
+    end
 
     -- Quantity label (compact)
     local qty_label = cell.add({
@@ -425,13 +439,13 @@ function M.add_grid_cell(grid, item_name, pdata)
     -- Limit label (compact)
     local limit_label = cell.add({
         type = "label",
-        caption = get_limit_string(item_name)
+        caption = get_limit_string(item_key)
     })
     limit_label.style.font = "default-small"
     limit_label.style.rich_text_setting = defines.rich_text_setting.enabled
 
     -- Cache references for live updates
-    pdata.inventory_grid_cache[item_name] = {
+    pdata.inventory_grid_cache[item_key] = {
         button = button,
         qty_label = qty_label,
         limit_label = limit_label
@@ -544,23 +558,25 @@ end
 
 --- Open the inventory edit popup for an item
 ---@param player LuaPlayer
----@param item_name string
-function M.open_inventory_edit_popup(player, item_name)
+---@param item_key string Composite key (e.g. "iron-plate" or "iron-plate:rare")
+function M.open_inventory_edit_popup(player, item_key)
     -- Destroy existing popup
     M.destroy_inventory_edit_popup(player)
 
-    local quantity = storage.inventory[item_name] or 0
-    local limit = storage.limits[item_name]
+    local base_name = quality.get_name(item_key)
+    local item_quality = quality.get_quality(item_key)
+    local quantity = storage.inventory[item_key] or 0
+    local limit = storage.limits[item_key]
     local is_unlimited = (limit == constants.UNLIMITED)
     local pdata = state.get_player_data(player.index)
-    local is_pinned = pdata.pinned_items[item_name] or false
+    local is_pinned = pdata.pinned_items[item_key] or false
 
     -- Create popup
     local popup = player.gui.screen.add({
         type = "frame",
         name = GUI.INVENTORY_EDIT_POPUP,
         direction = "vertical",
-        tags = { item_name = item_name }
+        tags = { item_key = item_key }
     })
     popup.auto_center = true
 
@@ -572,11 +588,12 @@ function M.open_inventory_edit_popup(player, item_name)
     titlebar.style.vertical_align = "center"
     titlebar.add({
         type = "sprite",
-        sprite = "item/" .. item_name
+        sprite = "item/" .. base_name
     })
+    local title_caption = quality.tooltip(item_key)
     titlebar.add({
         type = "label",
-        caption = item_name,
+        caption = title_caption,
         style = "frame_title"
     })
     local spacer = titlebar.add({ type = "empty-widget" })
@@ -614,7 +631,7 @@ function M.open_inventory_edit_popup(player, item_name)
         allow_decimal = false,
         allow_negative = false,
         enabled = not is_unlimited,
-        tags = { item_name = item_name }
+        tags = { item_key = item_key }
     })
     limit_field.style.width = 100
 
@@ -627,7 +644,7 @@ function M.open_inventory_edit_popup(player, item_name)
         caption = { "gui.gn-unlimited" },
         state = is_unlimited,
         tooltip = { "gui.unlimited-tooltip" },
-        tags = { item_name = item_name }
+        tags = { item_key = item_key }
     })
 
     content.add({ type = "line" })
@@ -641,7 +658,7 @@ function M.open_inventory_edit_popup(player, item_name)
         caption = { "gui.pin-to-hud" },
         state = is_pinned,
         tooltip = { "gui.pin-to-hud-tooltip" },
-        tags = { item_name = item_name }
+        tags = { item_key = item_key }
     })
 
     -- Button row: Remove (left) and OK (right)
@@ -654,7 +671,7 @@ function M.open_inventory_edit_popup(player, item_name)
         caption = { "gui.gn-remove-item" },
         style = "red_button",
         tooltip = { "gui.gn-remove-item-tooltip" },
-        tags = { item_name = item_name }
+        tags = { item_key = item_key }
     })
     local spacer2 = button_flow.add({ type = "empty-widget" })
     spacer2.style.horizontally_stretchable = true
@@ -663,7 +680,7 @@ function M.open_inventory_edit_popup(player, item_name)
         name = GUI.INVENTORY_EDIT_CONFIRM,
         caption = { "gui.gn-ok" },
         style = "confirm_button",
-        tags = { item_name = item_name }
+        tags = { item_key = item_key }
     })
 
     -- Set flag to prevent network GUI from being destroyed
@@ -742,25 +759,33 @@ function M.add_item_to_hud(player, item_name)
     if not manual_section then return end
 
     -- Check if already exists
-    if manual_section[GUI.PIN_HUD_FLOW .. item_name] then return end
+    local safe_name = quality.gui_name(item_name)
+    if manual_section[GUI.PIN_HUD_FLOW .. safe_name] then return end
 
     -- Create row flow
     local row = manual_section.add({
         type = "flow",
-        name = GUI.PIN_HUD_FLOW .. item_name,
+        name = GUI.PIN_HUD_FLOW .. safe_name,
         direction = "horizontal"
     })
     row.style.vertical_align = "center"
 
-    row.add({
-        type = "sprite",
-        sprite = "item/" .. item_name,
-        tooltip = item_name
+    local item_button = row.add({
+        type = "sprite-button",
+        sprite = "item/" .. quality.get_name(item_name),
+        tooltip = quality.tooltip(item_name),
+        style = "transparent_slot"
     })
+    item_button.style.size = 24
+    -- Native quality indicator
+    local item_quality = quality.get_quality(item_name)
+    if item_quality ~= "normal" then
+        item_button.quality = item_quality
+    end
 
     local qty_label = row.add({
         type = "label",
-        name = GUI.PIN_HUD_LABEL .. item_name .. "_qty",
+        name = GUI.PIN_HUD_LABEL .. safe_name .. "_qty",
         caption = format_hud_quantity(item_name)
     })
     qty_label.style.font = "default-semibold"
@@ -769,7 +794,7 @@ function M.add_item_to_hud(player, item_name)
 
     local limit_label = row.add({
         type = "label",
-        name = GUI.PIN_HUD_LABEL .. item_name .. "_limit",
+        name = GUI.PIN_HUD_LABEL .. safe_name .. "_limit",
         caption = "/" .. format_hud_limit(item_name)
     })
     limit_label.style.font = "default-semibold"
@@ -794,7 +819,8 @@ function M.remove_item_from_hud(player, item_name)
     if frame then
         local manual_section = frame[GUI.PIN_HUD_MANUAL_SECTION]
         if manual_section then
-            local row = manual_section[GUI.PIN_HUD_FLOW .. item_name]
+            local safe_name = quality.gui_name(item_name)
+            local row = manual_section[GUI.PIN_HUD_FLOW .. safe_name]
             if row then
                 row.destroy()
             end
@@ -865,25 +891,33 @@ function M.add_auto_pin_to_hud(player, item_name, percentage)
     end
 
     -- Check if already exists
-    if auto_section[GUI.AUTO_PIN_HUD_FLOW .. item_name] then return end
+    local safe_name = quality.gui_name(item_name)
+    if auto_section[GUI.AUTO_PIN_HUD_FLOW .. safe_name] then return end
 
     -- Create row flow
     local row = auto_section.add({
         type = "flow",
-        name = GUI.AUTO_PIN_HUD_FLOW .. item_name,
+        name = GUI.AUTO_PIN_HUD_FLOW .. safe_name,
         direction = "horizontal"
     })
     row.style.vertical_align = "center"
 
-    row.add({
-        type = "sprite",
-        sprite = "item/" .. item_name,
-        tooltip = item_name .. " (" .. string.format("%.0f%%", percentage * 100) .. ")"
+    local item_button = row.add({
+        type = "sprite-button",
+        sprite = "item/" .. quality.get_name(item_name),
+        tooltip = quality.tooltip(item_name) .. " (" .. string.format("%.0f%%", percentage * 100) .. ")",
+        style = "transparent_slot"
     })
+    item_button.style.size = 24
+    -- Native quality indicator
+    local item_quality = quality.get_quality(item_name)
+    if item_quality ~= "normal" then
+        item_button.quality = item_quality
+    end
 
     local qty_label = row.add({
         type = "label",
-        name = GUI.AUTO_PIN_HUD_LABEL .. item_name .. "_qty",
+        name = GUI.AUTO_PIN_HUD_LABEL .. safe_name .. "_qty",
         caption = format_hud_quantity(item_name, "red")
     })
     qty_label.style.font = "default-semibold"
@@ -893,7 +927,7 @@ function M.add_auto_pin_to_hud(player, item_name, percentage)
 
     local limit_label = row.add({
         type = "label",
-        name = GUI.AUTO_PIN_HUD_LABEL .. item_name .. "_limit",
+        name = GUI.AUTO_PIN_HUD_LABEL .. safe_name .. "_limit",
         caption = "[color=red]/[/color]" .. format_hud_limit(item_name, "red")
     })
     limit_label.style.font = "default-semibold"
@@ -922,7 +956,8 @@ function M.remove_auto_pin_from_hud(player, item_name)
     if frame then
         local auto_section = frame[GUI.PIN_HUD_AUTO_SECTION]
         if auto_section then
-            local row = auto_section[GUI.AUTO_PIN_HUD_FLOW .. item_name]
+            local safe_name = quality.gui_name(item_name)
+            local row = auto_section[GUI.AUTO_PIN_HUD_FLOW .. safe_name]
             if row then
                 row.destroy()
             end
@@ -1271,31 +1306,25 @@ function M.on_gui_event(event)
         return
     end
 
-    -- Limit changed
-    if tags and tags.item_name and element.name:find(GUI.INVENTORY_LIMIT_FIELD) then
-        local value = tonumber(element.text)
-        network_module.set_limit(tags.item_name, value)
-        return
-    end
-
     -- Add limit (item chosen)
     if element.name == GUI.INVENTORY_ADD_LIMIT_BUTTON then
-        local item_name = element.elem_value
-        if item_name then
+        -- elem_value is a table {name=string, quality=string} for item-with-quality, or nil
+        local item_key = quality.key_from_elem_value(element.elem_value)
+        if item_key then
             -- Check if item already exists in the cache
             local pdata = state.get_player_data(player.index)
             local cache = pdata.inventory_grid_cache
-            local existing = cache and cache[item_name]
+            local existing = cache and cache[item_key]
 
             if not existing then
                 -- Set default limit
-                storage.limits[item_name] = 10000
+                storage.limits[item_key] = 10000
 
                 -- Add new cell to inventory grid
                 local frame = player.gui.screen[GUI.NETWORK_FRAME]
                 local grid = frame and M.find_element(frame, GUI.INVENTORY_GRID)
                 if grid and grid.valid then
-                    M.add_grid_cell(grid, item_name, pdata)
+                    M.add_grid_cell(grid, item_key, pdata)
                 end
             end
             element.elem_value = nil
@@ -1318,8 +1347,8 @@ function M.on_gui_click(event)
 
     -- Grid cell clicked - open edit popup
     if element.name:find(GUI.INVENTORY_GRID_CELL) then
-        if tags and tags.item_name then
-            M.open_inventory_edit_popup(player, tags.item_name)
+        if tags and tags.item_key then
+            M.open_inventory_edit_popup(player, tags.item_key)
         end
         return
     end
@@ -1340,30 +1369,30 @@ function M.on_gui_click(event)
 
     -- Remove item from global inventory tracking
     if element.name == GUI.INVENTORY_EDIT_REMOVE then
-        local item_name = tags and tags.item_name
-        if item_name then
+        local item_key = tags and tags.item_key
+        if item_key then
             -- Remove from all tracking tables
-            storage.inventory[item_name] = nil
-            storage.limits[item_name] = nil
-            storage.previous_limits[item_name] = nil
+            storage.inventory[item_key] = nil
+            storage.limits[item_key] = nil
+            storage.previous_limits[item_key] = nil
             -- Remove pins and HUD elements for all players
             for _, pdata_entry in pairs(storage.player_data) do
                 if pdata_entry.pinned_items then
-                    pdata_entry.pinned_items[item_name] = nil
+                    pdata_entry.pinned_items[item_key] = nil
                 end
                 if pdata_entry.auto_pinned_items then
-                    pdata_entry.auto_pinned_items[item_name] = nil
+                    pdata_entry.auto_pinned_items[item_key] = nil
                 end
                 -- Destroy HUD elements if they exist
-                if pdata_entry.pin_hud_elements and pdata_entry.pin_hud_elements[item_name] then
-                    local elems = pdata_entry.pin_hud_elements[item_name]
+                if pdata_entry.pin_hud_elements and pdata_entry.pin_hud_elements[item_key] then
+                    local elems = pdata_entry.pin_hud_elements[item_key]
                     if elems.flow and elems.flow.valid then elems.flow.destroy() end
-                    pdata_entry.pin_hud_elements[item_name] = nil
+                    pdata_entry.pin_hud_elements[item_key] = nil
                 end
-                if pdata_entry.auto_pin_hud_elements and pdata_entry.auto_pin_hud_elements[item_name] then
-                    local elems = pdata_entry.auto_pin_hud_elements[item_name]
+                if pdata_entry.auto_pin_hud_elements and pdata_entry.auto_pin_hud_elements[item_key] then
+                    local elems = pdata_entry.auto_pin_hud_elements[item_key]
                     if elems.flow and elems.flow.valid then elems.flow.destroy() end
-                    pdata_entry.auto_pin_hud_elements[item_name] = nil
+                    pdata_entry.auto_pin_hud_elements[item_key] = nil
                 end
             end
         end
@@ -1481,16 +1510,10 @@ function M.on_gui_text_changed(event)
     -- Popup limit field
     if element.name == GUI.INVENTORY_EDIT_LIMIT_FIELD then
         local tags = element.tags
-        if tags and tags.item_name then
+        if tags and tags.item_key then
             local value = tonumber(element.text)
-            network_module.set_limit(tags.item_name, value)
+            network_module.set_limit(tags.item_key, value)
         end
-        return
-    end
-
-    -- Legacy: old inventory limit field
-    if element.name:find(GUI.INVENTORY_LIMIT_FIELD) then
-        M.on_gui_event(event)
         return
     end
 end
@@ -1550,9 +1573,9 @@ function M.on_gui_checked_state_changed(event)
 
     -- Popup unlimited checkbox
     if element.name == GUI.INVENTORY_EDIT_UNLIMITED_CB then
-        if not tags or not tags.item_name then return end
-        local item_name = tags.item_name
-        local current_limit = storage.limits[item_name]
+        if not tags or not tags.item_key then return end
+        local item_key = tags.item_key
+        local current_limit = storage.limits[item_key]
 
         -- Ensure previous_limits table exists
         storage.previous_limits = storage.previous_limits or {}
@@ -1564,17 +1587,17 @@ function M.on_gui_checked_state_changed(event)
         if element.state then
             -- Checked: save current limit and set unlimited
             if current_limit and current_limit > 0 then
-                storage.previous_limits[item_name] = current_limit
+                storage.previous_limits[item_key] = current_limit
             end
-            network_module.set_limit(item_name, constants.UNLIMITED)
+            network_module.set_limit(item_key, constants.UNLIMITED)
             if limit_field and limit_field.valid then
                 limit_field.enabled = false
                 limit_field.text = ""
             end
         else
             -- Unchecked: restore previous limit or block
-            local previous = storage.previous_limits[item_name]
-            network_module.set_limit(item_name, previous)
+            local previous = storage.previous_limits[item_key]
+            network_module.set_limit(item_key, previous)
             if limit_field and limit_field.valid then
                 limit_field.enabled = true
                 limit_field.text = previous and tostring(previous) or ""
@@ -1585,51 +1608,20 @@ function M.on_gui_checked_state_changed(event)
 
     -- Popup pin checkbox
     if element.name == GUI.INVENTORY_EDIT_PIN_CB then
-        if not tags or not tags.item_name then return end
-        local item_name = tags.item_name
+        if not tags or not tags.item_key then return end
+        local item_key = tags.item_key
         local pdata = state.get_player_data(player.index)
 
         if element.state then
             -- Pin item to HUD
-            pdata.pinned_items[item_name] = true
-            M.add_item_to_hud(player, item_name)
+            pdata.pinned_items[item_key] = true
+            M.add_item_to_hud(player, item_key)
         else
             -- Unpin item from HUD
-            pdata.pinned_items[item_name] = nil
-            M.remove_item_from_hud(player, item_name)
+            pdata.pinned_items[item_key] = nil
+            M.remove_item_from_hud(player, item_key)
         end
         return
-    end
-
-    -- Legacy: old inventory unlimited checkbox (for compatibility during transition)
-    if element.name and element.name:find(GUI.INVENTORY_UNLIMITED_CHECKBOX) then
-        if not tags or not tags.item_name then return end
-
-        local item_name = tags.item_name
-        local current_limit = storage.limits[item_name]
-
-        storage.previous_limits = storage.previous_limits or {}
-
-        local frame = player.gui.screen[GUI.NETWORK_FRAME]
-        local limit_field = frame and M.find_element(frame, GUI.INVENTORY_LIMIT_FIELD .. "_" .. item_name)
-
-        if element.state then
-            if current_limit and current_limit > 0 then
-                storage.previous_limits[item_name] = current_limit
-            end
-            network_module.set_limit(item_name, constants.UNLIMITED)
-            if limit_field and limit_field.valid then
-                limit_field.enabled = false
-                limit_field.text = ""
-            end
-        else
-            local previous = storage.previous_limits[item_name]
-            network_module.set_limit(item_name, previous)
-            if limit_field and limit_field.valid then
-                limit_field.enabled = true
-                limit_field.text = previous and tostring(previous) or ""
-            end
-        end
     end
 end
 
