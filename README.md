@@ -4,8 +4,6 @@ Original mod description further down.
 !!!!!!!!!!!!!!  With some help from AI, these are the changes:
 
 
-With some help from AI, these are the changes:
-
 # Feature: Multi-buffer networks, copy-paste configuration, configurable chest size, and UI improvements
 
 **v0.1.2 → v0.3.2**
