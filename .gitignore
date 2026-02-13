@@ -1,1 +1,23 @@
+# IDE / Editor
 .vscode
+.idea
+
+# Claude Code (local only, not part of the mod)
+CLAUDE.md
+.claude/
+screenshots/
+
+# OS junk — macOS
+.DS_Store
+
+# OS junk — Windows
+Thumbs.db
+ehthumbs.db
+desktop.ini
+
+# Temp / lock files
+*.tmp
+~$*
+
+# Factorio mod packaging artifacts
+*.zip
